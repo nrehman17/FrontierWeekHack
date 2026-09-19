@@ -1,0 +1,67 @@
+{
+  "scenarios": [
+    {
+      "scenario_id": "S1_ACT",
+      "title": "Meter margin cascade",
+      "synthetic": true,
+      "weak_signals": [
+        "context tokens per session rising",
+        "provider inference price increased",
+        "cache hit rate declining"
+      ],
+      "confidence_p": 0.83,
+      "predicted_lead_minutes": 120,
+      "action_latency_minutes": 15,
+      "safety_margin_minutes": 15,
+      "action_tier": "T1",
+      "false_action_cost_cf": 5,
+      "inaction_cost_ci": 100,
+      "skeptic_verdict": "SUPPORT",
+      "false_positive_pattern": null,
+      "proposed_action": "route eligible traffic to lower-cost model tier",
+      "expected_decision": "ACT_AUTO"
+    },
+    {
+      "scenario_id": "S2_VETO",
+      "title": "Steady-state straggler",
+      "synthetic": true,
+      "weak_signals": [
+        "single slow node observed",
+        "latency remains stable for six hours",
+        "no correlated cost acceleration"
+      ],
+      "confidence_p": 0.72,
+      "predicted_lead_minutes": 90,
+      "action_latency_minutes": 15,
+      "safety_margin_minutes": 15,
+      "action_tier": "T1",
+      "false_action_cost_cf": 5,
+      "inaction_cost_ci": 100,
+      "skeptic_verdict": "CONTRADICT",
+      "false_positive_pattern": "stable-straggler",
+      "proposed_action": "reroute traffic away from suspected node",
+      "expected_decision": "VETO"
+    },
+    {
+      "scenario_id": "S3_ABSTAIN",
+      "title": "Ambiguous cost drift",
+      "synthetic": true,
+      "weak_signals": [
+        "cost per session drifting upward",
+        "cache efficiency fluctuating",
+        "demand mix uncertain"
+      ],
+      "confidence_p": 0.50,
+      "predicted_lead_minutes": 75,
+      "action_latency_minutes": 15,
+      "safety_margin_minutes": 15,
+      "action_tier": "T2",
+      "false_action_cost_cf": 20,
+      "inaction_cost_ci": 100,
+      "skeptic_verdict": "INSUFFICIENT",
+      "false_positive_pattern": null,
+      "proposed_action": "prepare bounded routing intervention for human review",
+      "expected_decision": "ABSTAIN"
+    }
+  ]
+}
