@@ -1,0 +1,26 @@
+{
+  "policy_id": "cascade-breaker-decision-policy",
+  "policy_version": "1.0",
+  "auto_act": {
+    "min_confidence": 0.8,
+    "min_lead_latency_multiple": 2.0,
+    "required_tier": "T1",
+    "max_cf_ci_ratio": 0.1
+  },
+  "human_act": {
+    "min_confidence": 0.6,
+    "min_usable_lead_minutes": 30,
+    "required_tier": "T2"
+  },
+  "abstain": {
+    "min_confidence": 0.4,
+    "max_confidence_exclusive": 0.6,
+    "max_ttl_minutes": 240,
+    "last_call_tipping_point_minutes": 30
+  },
+  "veto": {
+    "confidence_below": 0.4,
+    "prohibited_tiers": ["T3"],
+    "skeptic_false_positive_match": true
+  }
+}
