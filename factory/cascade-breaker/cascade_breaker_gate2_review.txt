@@ -1,0 +1,697 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from src.agents import run_cascade, run_governor, run_scout, run_skeptic
+from src.policy import evaluate_policy, load_policy
+from src.schemas import (
+    ActionTier,
+    Agents,
+    DecisionInputs,
+    DecisionState,
+    Evidence,
+    PolicyRef,
+)
+
+
+ROOT = Path(__file__).resolve().parent.parent
+SCENARIOS_PATH = ROOT / "data" / "scenarios.json"
+LEDGER_PATH = ROOT / "ledger" / "runs.jsonl"
+
+
+def load_scenarios() -> list[dict[str, Any]]:
+    with SCENARIOS_PATH.open("r", encoding="utf-8") as handle:
+        return json.load(handle)["scenarios"]
+
+
+def build_decision_inputs(scenario: dict[str, Any]) -> DecisionInputs:
+    predicted_lead = float(scenario["predicted_lead_minutes"])
+    latency = float(scenario["action_latency_minutes"])
+    safety_margin = float(scenario["safety_margin_minutes"])
+    cf = float(scenario["false_action_cost_cf"])
+    ci = float(scenario["inaction_cost_ci"])
+
+    usable_lead = max(0.0, predicted_lead - latency - safety_margin)
+    cf_ci_ratio = cf / ci if ci > 0 else float("inf")
+
+    return DecisionInputs(
+        confidence_p=float(scenario["confidence_p"]),
+        predicted_lead_minutes=predicted_lead,
+        action_latency_minutes=latency,
+        safety_margin_minutes=safety_margin,
+        usable_lead_time_minutes=usable_lead,
+        action_tier=ActionTier(scenario["action_tier"]),
+        false_action_cost_cf=cf,
+        inaction_cost_ci=ci,
+        cf_ci_ratio=cf_ci_ratio,
+    )
+
+
+def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
+    run_id = str(uuid4())
+    started_at = datetime.now(timezone.utc)
+
+    scout = run_scout(scenario)
+    cascade = run_cascade(scenario, scout)
+    skeptic = run_skeptic(scenario, cascade)
+    governor = run_governor(scenario, scout, cascade, skeptic)
+
+    policy = load_policy()
+    decision_inputs = build_decision_inputs(scenario)
+
+    state = DecisionState(
+        run_id=run_id,
+        scenario_id=scenario["scenario_id"],
+        started_at=started_at,
+        policy=PolicyRef(
+            policy_id=policy["policy_id"],
+            policy_version=policy["policy_version"],
+        ),
+        evidence=Evidence(
+            evidence_complete=True,
+        ),
+        decision_inputs=decision_inputs,
+        agents=Agents(
+            scout=scout,
+            cascade=cascade,
+            skeptic=skeptic,
+            governor=governor,
+        ),
+    )
+
+    result = evaluate_policy(state, policy)
+    state.final_decision = result.decision
+    state.completed_at = datetime.now(timezone.utc)
+
+    record = {
+        "run_id": run_id,
+        "scenario_id": scenario["scenario_id"],
+        "synthetic": bool(scenario["synthetic"]),
+        "expected_decision": scenario["expected_decision"],
+        "governor_recommendation": governor.recommended_decision.value,
+        "policy_decision": result.decision.value,
+        "authorized": result.authorized,
+        "reason_code": result.reason_code,
+        "match": result.decision.value == scenario["expected_decision"],
+        "state": state.model_dump(mode="json"),
+    }
+
+    LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with LEDGER_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+    return record
+
+
+def main() -> int:
+    scenarios = load_scenarios()
+    all_match = True
+
+    for scenario in scenarios:
+        record = run_scenario(scenario)
+        all_match = all_match and record["match"]
+
+        print(
+            f"{record['scenario_id']}: "
+            f"expected={record['expected_decision']} "
+            f"policy={record['policy_decision']} "
+            f"authorized={record['authorized']} "
+            f"match={record['match']}"
+        )
+
+    return 0 if all_match else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+from __future__ import annotations
+
+from typing import Any
+
+from src.schemas import (
+    AgentStatus,
+    CascadeState,
+    Decision,
+    GovernorState,
+    ScoutState,
+    SkepticState,
+    SkepticVerdict,
+)
+
+
+def run_scout(scenario: dict[str, Any]) -> ScoutState:
+    """Detect weak multi-signal evidence. Scout has no action authority."""
+    return ScoutState(
+        status=AgentStatus.COMPLETE,
+        weak_signals=list(scenario["weak_signals"]),
+        confidence=float(scenario["confidence_p"]),
+        reason="Synthetic telemetry contains the weak signals supplied for this demo scenario.",
+    )
+
+
+def run_cascade(
+    scenario: dict[str, Any],
+    scout: ScoutState,
+) -> CascadeState:
+    """Construct the cascade hypothesis and proposed intervention."""
+    tipping_point = float(scenario["predicted_lead_minutes"])
+
+    return CascadeState(
+        status=AgentStatus.COMPLETE,
+        hypothesis=(
+            f"{scenario['title']}: correlated weak signals may form a forward cascade."
+        ),
+        tipping_point_minutes=tipping_point,
+        proposed_action=scenario["proposed_action"],
+        confidence=float(scenario["confidence_p"]),
+        reason=(
+            "Cascade hypothesis constructed from Scout evidence; "
+            "this recommendation does not authorize execution."
+        ),
+    )
+
+
+def run_skeptic(
+    scenario: dict[str, Any],
+    cascade: CascadeState,
+) -> SkepticState:
+    """Adversarially challenge the cascade hypothesis and intervention."""
+    verdict = SkepticVerdict(scenario["skeptic_verdict"])
+    false_positive = scenario.get("false_positive_pattern")
+
+    contradictory_evidence: list[str] = []
+    missing_evidence: list[str] = []
+
+    if verdict == SkepticVerdict.CONTRADICT:
+        contradictory_evidence.append(
+            "Observed evidence matches a known stable-pattern alternative."
+        )
+    elif verdict == SkepticVerdict.INSUFFICIENT:
+        missing_evidence.append(
+            "Additional correlated evidence is required before intervention."
+        )
+
+    return SkepticState(
+        status=AgentStatus.COMPLETE,
+        verdict=verdict,
+        false_positive_pattern=false_positive,
+        alternative_hypothesis=(
+            "Observed behavior may be steady-state or non-causal."
+            if verdict == SkepticVerdict.CONTRADICT
+            else None
+        ),
+        contradictory_evidence=contradictory_evidence,
+        missing_evidence=missing_evidence,
+        reason=(
+            "Skeptic independently challenges the proposed cascade; "
+            "it may block but cannot authorize action."
+        ),
+    )
+
+
+def run_governor(
+    scenario: dict[str, Any],
+    scout: ScoutState,
+    cascade: CascadeState,
+    skeptic: SkepticState,
+) -> GovernorState:
+    """Synthesize agent evidence. Governor recommends; policy code decides."""
+    if skeptic.false_positive_pattern or skeptic.verdict == SkepticVerdict.CONTRADICT:
+        recommendation = Decision.VETO
+    elif skeptic.verdict == SkepticVerdict.INSUFFICIENT:
+        recommendation = Decision.ABSTAIN
+    elif float(scenario["confidence_p"]) >= 0.8:
+        recommendation = Decision.ACT_AUTO
+    elif float(scenario["confidence_p"]) >= 0.6:
+        recommendation = Decision.ACT_HUMAN
+    else:
+        recommendation = Decision.ABSTAIN
+
+    return GovernorState(
+        status=AgentStatus.COMPLETE,
+        recommended_decision=recommendation,
+        confidence=float(scenario["confidence_p"]),
+        reason=(
+            "Governor synthesized Scout, Cascade, and Skeptic outputs. "
+            "Recommendation is advisory; deterministic policy retains authority."
+        ),
+    )
+"""Microsoft Foundry adapter for Cascade Breaker.
+
+Four advisory agents:
+Scout -> Cascade -> Skeptic -> Governor
+
+IMPORTANT:
+LLM agents never execute actions.
+Final authority remains with the deterministic Cascade Action Gate.
+"""
+
+import os
+
+from azure.ai.projects import AIProjectClient
+from azure.ai.projects.models import PromptAgentDefinition
+from azure.identity import DefaultAzureCredential
+
+
+PROJECT_ENDPOINT = os.getenv("FOUNDRY_ENDPOINT") or os.getenv("PROJECT_CONNECTION_STRING")
+MODEL_DEPLOYMENT_NAME = os.getenv("MODEL_DEPLOYMENT_NAME", "gpt-4o")
+
+
+AGENT_NAMES = {
+    "scout": "cascade-breaker-scout",
+    "cascade": "cascade-breaker-cascade",
+    "skeptic": "cascade-breaker-skeptic",
+    "governor": "cascade-breaker-governor",
+}
+
+AGENT_INSTRUCTIONS = {
+    "scout": """
+You are Scout in Cascade Breaker.
+Detect weak multi-signal evidence that may indicate an emerging cascade.
+Prioritize high recall. Report evidence and uncertainty.
+Do not recommend or execute actions.
+Return concise machine-readable reasoning suitable for downstream agents.
+""".strip(),
+
+    "cascade": """
+You are Cascade in Cascade Breaker.
+Given telemetry and Scout evidence, construct the most plausible cascade hypothesis.
+Estimate the tipping point and usable intervention window.
+Propose a bounded intervention and state assumptions and uncertainty.
+You may propose an action, but you cannot authorize or execute it.
+""".strip(),
+
+    "skeptic": """
+You are Skeptic in Cascade Breaker.
+Adversarially challenge the proposed cascade and intervention.
+Look for contradictory evidence, alternative explanations, missing evidence,
+and known false-positive patterns.
+You may block a hypothesis but you cannot authorize or execute an action.
+""".strip(),
+
+    "governor": """
+You are Governor in Cascade Breaker.
+Synthesize Scout, Cascade, and Skeptic evidence.
+Recommend exactly one decision: ACT_AUTO, ACT_HUMAN, ABSTAIN, or VETO.
+Explain the recommendation and uncertainty.
+Your recommendation is advisory only.
+The deterministic Cascade Action Gate has final authority and you must never
+claim that you executed or authorized an action.
+""".strip(),
+}
+
+def create_foundry_agents(project_client, model_deployment_name: str):
+    """Create/version the four Cascade Breaker agents in Microsoft Foundry."""
+    created = {}
+
+    for role in ("scout", "cascade", "skeptic", "governor"):
+        created[role] = project_client.agents.create_version(
+            agent_name=f"cascade-breaker-{role}",
+            definition=PromptAgentDefinition(
+                model=model_deployment_name,
+                instructions=AGENT_INSTRUCTIONS[role],
+            ),
+        )
+
+    return created
+
+def run_foundry_agent(client, agent, input_text: str) -> str:
+    """Run one Cascade Breaker Foundry agent and return its text response."""
+    openai = client.get_openai_client()
+    conversation = openai.conversations.create()
+
+    try:
+        response = openai.responses.create(
+            input=input_text,
+            conversation=conversation.id,
+            extra_body={
+                "agent_reference": {
+                    "name": agent.name,
+                    "type": "agent_reference",
+                }
+            },
+        )
+        return response.output_text
+    finally:
+        openai.conversations.delete(conversation_id=conversation.id)
+from datetime import datetime
+from enum import Enum
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class Decision(str, Enum):
+    ACT_AUTO = "ACT_AUTO"
+    ACT_HUMAN = "ACT_HUMAN"
+    ABSTAIN = "ABSTAIN"
+    VETO = "VETO"
+
+
+class ActionTier(str, Enum):
+    T1 = "T1"
+    T2 = "T2"
+    T3 = "T3"
+
+
+class AgentStatus(str, Enum):
+    PENDING = "PENDING"
+    COMPLETE = "COMPLETE"
+    ERROR = "ERROR"
+
+
+class SkepticVerdict(str, Enum):
+    SUPPORT = "SUPPORT"
+    CONTRADICT = "CONTRADICT"
+    INSUFFICIENT = "INSUFFICIENT"
+
+
+class PolicyRef(StrictModel):
+    policy_id: str
+    policy_version: str
+
+
+class EvidenceItem(StrictModel):
+    evidence_id: str
+    timestamp: datetime
+    source: str
+    metric: str
+    value: float
+    baseline: Optional[float] = None
+    change_pct: Optional[float] = None
+    cohort: Optional[str] = None
+    synthetic: bool = True
+
+
+class Evidence(StrictModel):
+    observations: list[EvidenceItem] = Field(default_factory=list)
+    secondary_evidence: list[EvidenceItem] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    evidence_complete: bool = False
+
+
+class DecisionInputs(StrictModel):
+    confidence_p: Optional[float] = Field(None, ge=0, le=1)
+    predicted_lead_minutes: Optional[float] = Field(None, ge=0)
+    action_latency_minutes: Optional[float] = Field(None, ge=0)
+    safety_margin_minutes: Optional[float] = Field(None, ge=0)
+    usable_lead_time_minutes: Optional[float] = None
+    action_tier: Optional[ActionTier] = None
+    false_action_cost_cf: Optional[float] = Field(None, ge=0)
+    inaction_cost_ci: Optional[float] = Field(None, gt=0)
+    cf_ci_ratio: Optional[float] = Field(None, ge=0)
+
+
+class ScoutState(StrictModel):
+    status: AgentStatus = AgentStatus.PENDING
+    weak_signals: list[str] = Field(default_factory=list)
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+    reason: Optional[str] = None
+
+
+class CascadeState(StrictModel):
+    status: AgentStatus = AgentStatus.PENDING
+    hypothesis: Optional[str] = None
+    tipping_point_minutes: Optional[float] = Field(None, ge=0)
+    proposed_action: Optional[str] = None
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+    reason: Optional[str] = None
+
+
+class SkepticState(StrictModel):
+    status: AgentStatus = AgentStatus.PENDING
+    verdict: Optional[SkepticVerdict] = None
+    false_positive_pattern: Optional[str] = None
+    alternative_hypothesis: Optional[str] = None
+    contradictory_evidence: list[str] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    reason: Optional[str] = None
+
+
+class GovernorState(StrictModel):
+    status: AgentStatus = AgentStatus.PENDING
+    recommended_decision: Optional[Decision] = None
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+    reason: Optional[str] = None
+
+
+class Agents(StrictModel):
+    scout: ScoutState = Field(default_factory=ScoutState)
+    cascade: CascadeState = Field(default_factory=CascadeState)
+    skeptic: SkepticState = Field(default_factory=SkepticState)
+    governor: GovernorState = Field(default_factory=GovernorState)
+
+
+class GateState(StrictModel):
+    decision: Optional[Decision] = None
+    authorized: bool = False
+    reason_code: Optional[str] = None
+
+
+class AbstainState(StrictModel):
+    active: bool = False
+    created_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    ttl_minutes: Optional[float] = Field(None, ge=0)
+    last_call_required: bool = False
+
+
+class DecisionState(StrictModel):
+    schema_version: str = "1.0"
+    run_id: str
+    scenario_id: str
+    scenario_version: str = "1.0"
+    started_at: datetime
+    policy: PolicyRef
+    evidence: Evidence
+    decision_inputs: DecisionInputs
+    agents: Agents = Field(default_factory=Agents)
+    gate: GateState = Field(default_factory=GateState)
+    abstain: AbstainState = Field(default_factory=AbstainState)
+    final_decision: Optional[Decision] = None
+    completed_at: Optional[datetime] = None
+import json
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict
+
+from src.schemas import ActionTier, Decision, DecisionState
+
+
+class PolicyResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Decision
+    authorized: bool
+    reason_code: str
+
+
+def load_policy() -> dict:
+    policy_path = Path(__file__).resolve().parent.parent / "decision_policy.json"
+
+    with policy_path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
+    inputs = state.decision_inputs
+    skeptic = state.agents.skeptic
+
+    p = inputs.confidence_p
+    usable_lead = inputs.usable_lead_time_minutes
+    latency = inputs.action_latency_minutes
+    tier = inputs.action_tier
+    ratio = inputs.cf_ci_ratio
+
+    if p is None or usable_lead is None or latency is None or tier is None or ratio is None:
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+            authorized=False,
+            reason_code="REQUIRED_INPUT_MISSING",
+        )
+
+    # Highest authority: hard VETO conditions.
+    if tier.value in policy["veto"]["prohibited_tiers"]:
+        return PolicyResult(
+            decision=Decision.VETO,
+            authorized=False,
+            reason_code="T3_ACTION_PROHIBITED",
+        )
+
+    if (
+        policy["veto"]["skeptic_false_positive_match"]
+        and skeptic.false_positive_pattern is not None
+    ):
+        return PolicyResult(
+            decision=Decision.VETO,
+            authorized=False,
+            reason_code="SKEPTIC_FALSE_POSITIVE_MATCH",
+        )
+
+    if p < policy["veto"]["confidence_below"]:
+        return PolicyResult(
+            decision=Decision.VETO,
+            authorized=False,
+            reason_code="CONFIDENCE_BELOW_VETO_THRESHOLD",
+        )
+
+    # Frozen ABSTAIN confidence band takes precedence over ACT evaluation.
+    abstain = policy["abstain"]
+    if abstain["min_confidence"] <= p < abstain["max_confidence_exclusive"]:
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+            authorized=False,
+            reason_code="CONFIDENCE_INSUFFICIENT",
+        )
+
+    # Human ACT.
+    human = policy["human_act"]
+    if (
+        tier == ActionTier(human["required_tier"])
+        and p >= human["min_confidence"]
+        and usable_lead >= human["min_usable_lead_minutes"]
+    ):
+        return PolicyResult(
+            decision=Decision.ACT_HUMAN,
+            authorized=False,
+            reason_code="HUMAN_ACT_REQUIRED",
+        )
+
+    # Auto ACT.
+    auto = policy["auto_act"]
+    if (
+        tier == ActionTier(auto["required_tier"])
+        and p >= auto["min_confidence"]
+        and usable_lead >= auto["min_lead_latency_multiple"] * latency
+        and ratio <= auto["max_cf_ci_ratio"]
+    ):
+        return PolicyResult(
+            decision=Decision.ACT_AUTO,
+            authorized=True,
+            reason_code="AUTO_ACT_THRESHOLD_MET",
+        )
+
+    # Evidence is plausible but one or more ACT gates were not met.
+    return PolicyResult(
+        decision=Decision.ABSTAIN,
+        authorized=False,
+        reason_code="ACT_GATE_NOT_MET",
+    )
+{
+  "policy_id": "cascade-breaker-decision-policy",
+  "policy_version": "1.0",
+  "auto_act": {
+    "min_confidence": 0.8,
+    "min_lead_latency_multiple": 2.0,
+    "required_tier": "T1",
+    "max_cf_ci_ratio": 0.1
+  },
+  "human_act": {
+    "min_confidence": 0.6,
+    "min_usable_lead_minutes": 30,
+    "required_tier": "T2"
+  },
+  "abstain": {
+    "min_confidence": 0.4,
+    "max_confidence_exclusive": 0.6,
+    "max_ttl_minutes": 240,
+    "last_call_tipping_point_minutes": 30
+  },
+  "veto": {
+    "confidence_below": 0.4,
+    "prohibited_tiers": ["T3"],
+    "skeptic_false_positive_match": true
+  }
+}
+{
+  "scenarios": [
+    {
+      "scenario_id": "S1_ACT",
+      "title": "Meter margin cascade",
+      "synthetic": true,
+      "weak_signals": [
+        "context tokens per session rising",
+        "provider inference price increased",
+        "cache hit rate declining"
+      ],
+      "confidence_p": 0.83,
+      "predicted_lead_minutes": 120,
+      "action_latency_minutes": 15,
+      "safety_margin_minutes": 15,
+      "action_tier": "T1",
+      "false_action_cost_cf": 5,
+      "inaction_cost_ci": 100,
+      "skeptic_verdict": "SUPPORT",
+      "false_positive_pattern": null,
+      "proposed_action": "route eligible traffic to lower-cost model tier",
+      "expected_decision": "ACT_AUTO"
+    },
+    {
+      "scenario_id": "S2_VETO",
+      "title": "Steady-state straggler",
+      "synthetic": true,
+      "weak_signals": [
+        "single slow node observed",
+        "latency remains stable for six hours",
+        "no correlated cost acceleration"
+      ],
+      "confidence_p": 0.72,
+      "predicted_lead_minutes": 90,
+      "action_latency_minutes": 15,
+      "safety_margin_minutes": 15,
+      "action_tier": "T1",
+      "false_action_cost_cf": 5,
+      "inaction_cost_ci": 100,
+      "skeptic_verdict": "CONTRADICT",
+      "false_positive_pattern": "stable-straggler",
+      "proposed_action": "reroute traffic away from suspected node",
+      "expected_decision": "VETO"
+    },
+    {
+      "scenario_id": "S3_ABSTAIN",
+      "title": "Ambiguous cost drift",
+      "synthetic": true,
+      "weak_signals": [
+        "cost per session drifting upward",
+        "cache efficiency fluctuating",
+        "demand mix uncertain"
+      ],
+      "confidence_p": 0.50,
+      "predicted_lead_minutes": 75,
+      "action_latency_minutes": 15,
+      "safety_margin_minutes": 15,
+      "action_tier": "T2",
+      "false_action_cost_cf": 20,
+      "inaction_cost_ci": 100,
+      "skeptic_verdict": "INSUFFICIENT",
+      "false_positive_pattern": null,
+      "proposed_action": "prepare bounded routing intervention for human review",
+      "expected_decision": "ABSTAIN"
+    }
+  ]
+}
+]633;E;echo;2b3b09b6-d8ac-4df6-bd77-b7d0f0f10333]633;C
+===== GATE 2 RUNTIME VERIFICATION =====
+Sat 19 Sep 2026 08:20:58 PM UTC
+S1_ACT: expected=ACT_AUTO policy=ACT_AUTO authorized=True match=True
+S2_VETO: expected=VETO policy=VETO authorized=False match=True
+S3_ABSTAIN: expected=ABSTAIN policy=ABSTAIN authorized=False match=True
+
+===== PYTEST VERIFICATION =====
+...........                                                              [100%]
+11 passed in 0.15s
+
+===== GIT HEAD =====
+1619490075c905330922d79524d971f54ad16dc3
+
+===== GIT STATUS =====
+?? cascade_breaker_gate2_review.txt
+?? ../../factory_backup_20260916.zip
