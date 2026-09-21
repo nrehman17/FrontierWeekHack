@@ -45,8 +45,11 @@ def invoke_validated(client, agent, prompt: str, model):
     # Normalize only fields whose strict schema requires a list.
     if model is SkepticState:
         for field in ("contradictory_evidence", "missing_evidence"):
-            if data.get(field) is None:
+            value = data.get(field)
+            if value is None:
                 data[field] = []
+            elif isinstance(value, str):
+                data[field] = [value]
 
     return model.model_validate(data)
 
