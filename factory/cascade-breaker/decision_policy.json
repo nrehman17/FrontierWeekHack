@@ -21,6 +21,7 @@
   "veto": {
     "confidence_below": 0.4,
     "prohibited_tiers": ["T3"],
-    "skeptic_false_positive_match": true
+    "skeptic_false_positive_match": true,
+    "known_false_positive_patterns": ["stable-straggler"]
   }
 }

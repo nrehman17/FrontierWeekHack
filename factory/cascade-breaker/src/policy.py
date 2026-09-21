@@ -46,9 +46,19 @@ def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
             reason_code="T3_ACTION_PROHIBITED",
         )
 
+    known_false_positive_patterns = {
+        str(pattern).strip().casefold()
+        for pattern in policy["veto"].get("known_false_positive_patterns", [])
+    }
+    skeptic_false_positive_pattern = (
+        skeptic.false_positive_pattern.strip().casefold()
+        if skeptic.false_positive_pattern
+        else None
+    )
+
     if (
         policy["veto"]["skeptic_false_positive_match"]
-        and skeptic.false_positive_pattern is not None
+        and skeptic_false_positive_pattern in known_false_positive_patterns
     ):
         return PolicyResult(
             decision=Decision.VETO,

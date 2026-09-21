@@ -46,7 +46,7 @@ def make_state(
 
     if skeptic_false_positive:
         state.agents.skeptic.verdict = SkepticVerdict.CONTRADICT
-        state.agents.skeptic.false_positive_pattern = "KNOWN_FALSE_POSITIVE"
+        state.agents.skeptic.false_positive_pattern = "stable-straggler"
 
     return state
 
@@ -193,6 +193,31 @@ def test_skeptic_veto_beats_very_high_confidence():
     assert result.decision == Decision.VETO
     assert result.authorized is False
     assert result.reason_code == "SKEPTIC_FALSE_POSITIVE_MATCH"
+
+
+def test_unregistered_skeptic_pattern_cannot_force_veto():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-UNREGISTERED-SKEPTIC-PATTERN",
+        "S1_ACT",
+        p=0.83,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+    state.agents.skeptic.verdict = SkepticVerdict.CONTRADICT
+    state.agents.skeptic.false_positive_pattern = (
+        "Synthetic scenario parameters driving overfitted conclusions based on weak signals."
+    )
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.ACT_AUTO
+    assert result.authorized is True
+    assert result.reason_code == "AUTO_ACT_THRESHOLD_MET"
 
 
 def test_scenario_label_cannot_change_decision():
