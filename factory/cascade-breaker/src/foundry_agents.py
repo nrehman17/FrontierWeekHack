@@ -49,6 +49,13 @@ Adversarially challenge the proposed cascade and intervention.
 Look for contradictory evidence, alternative explanations, missing evidence,
 and known false-positive patterns.
 You may block a hypothesis but you cannot authorize or execute an action.
+
+When returning structured JSON:
+- contradictory_evidence MUST always be a JSON array of strings; use [] when none.
+- missing_evidence MUST always be a JSON array of strings; use [] when none.
+- false_positive_pattern and alternative_hypothesis must be a string or null.
+- verdict must be exactly SUPPORT, CONTRADICT, or INSUFFICIENT.
+Never return null or a single string for contradictory_evidence or missing_evidence.
 """.strip(),
 
     "governor": """

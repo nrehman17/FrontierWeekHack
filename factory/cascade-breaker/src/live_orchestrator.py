@@ -40,6 +40,14 @@ def invoke_validated(client, agent, prompt: str, model):
     raw = run_foundry_agent(client, agent, prompt)
     data = parse_json_response(raw)
     data["status"] = AgentStatus.COMPLETE.value
+
+    # Foundry may emit JSON null for semantically empty list fields.
+    # Normalize only fields whose strict schema requires a list.
+    if model is SkepticState:
+        for field in ("contradictory_evidence", "missing_evidence"):
+            if data.get(field) is None:
+                data[field] = []
+
     return model.model_validate(data)
 
 
@@ -132,6 +140,9 @@ def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     )
 
     result = evaluate_policy(state, policy)
+    state.gate.decision = result.decision
+    state.gate.authorized = result.authorized
+    state.gate.reason_code = result.reason_code
     state.final_decision = result.decision
     state.completed_at = datetime.now(timezone.utc)
 
