@@ -84,8 +84,8 @@ def create_foundry_agents(project_client, model_deployment_name: str):
 
     return created
 
-def run_foundry_agent(client, agent, input_text: str) -> str:
-    """Run one Cascade Breaker Foundry agent and return its text response."""
+def run_foundry_agent(client, agent, input_text: str) -> dict[str, str]:
+    """Run one Foundry agent and return its response plus audit-safe invocation metadata."""
     openai = client.get_openai_client()
     conversation = openai.conversations.create()
 
@@ -100,6 +100,13 @@ def run_foundry_agent(client, agent, input_text: str) -> str:
                 }
             },
         )
-        return response.output_text
+        return {
+            "output_text": response.output_text,
+            "response_id": str(response.id),
+            "status": str(response.status),
+            "conversation_id": str(conversation.id),
+            "model": str(response.model),
+            "agent_name": str(agent.name),
+        }
     finally:
         openai.conversations.delete(conversation_id=conversation.id)

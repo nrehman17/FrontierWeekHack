@@ -37,7 +37,8 @@ def parse_json_response(text: str) -> dict[str, Any]:
 
 
 def invoke_validated(client, agent, prompt: str, model):
-    raw = run_foundry_agent(client, agent, prompt)
+    invocation = run_foundry_agent(client, agent, prompt)
+    raw = invocation["output_text"]
     data = parse_json_response(raw)
     data["status"] = AgentStatus.COMPLETE.value
 
@@ -51,7 +52,15 @@ def invoke_validated(client, agent, prompt: str, model):
             elif isinstance(value, str):
                 data[field] = [value]
 
-    return model.model_validate(data)
+    validated = model.model_validate(data)
+    evidence = {
+        "agent_name": invocation["agent_name"],
+        "response_id": invocation["response_id"],
+        "status": invocation["status"],
+        "conversation_id": invocation["conversation_id"],
+        "model": invocation["model"],
+    }
+    return validated, evidence
 
 
 def public_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
@@ -77,7 +86,7 @@ def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
 
     scenario_input = public_scenario(scenario)
 
-    scout = invoke_validated(
+    scout, scout_invocation = invoke_validated(
         client,
         agents["scout"],
         "Return JSON only with keys weak_signals, confidence, reason. "
@@ -86,7 +95,7 @@ def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         ScoutState,
     )
 
-    cascade = invoke_validated(
+    cascade, cascade_invocation = invoke_validated(
         client,
         agents["cascade"],
         "Return JSON only with keys hypothesis, tipping_point_minutes, "
@@ -96,7 +105,7 @@ def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         CascadeState,
     )
 
-    skeptic = invoke_validated(
+    skeptic, skeptic_invocation = invoke_validated(
         client,
         agents["skeptic"],
         "Return JSON only with keys verdict, false_positive_pattern, "
@@ -110,7 +119,7 @@ def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         SkepticState,
     )
 
-    governor = invoke_validated(
+    governor, governor_invocation = invoke_validated(
         client,
         agents["governor"],
         "Return JSON only with keys recommended_decision, confidence, reason. "
@@ -157,6 +166,12 @@ def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         "policy_decision": result.decision.value,
         "authorized": result.authorized,
         "reason_code": result.reason_code,
+        "foundry_invocations": {
+            "scout": scout_invocation,
+            "cascade": cascade_invocation,
+            "skeptic": skeptic_invocation,
+            "governor": governor_invocation,
+        },
         "state": state.model_dump(mode="json"),
     }
 
