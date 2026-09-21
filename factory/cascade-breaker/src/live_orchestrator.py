@@ -12,6 +12,7 @@ from azure.identity import DefaultAzureCredential
 
 from src.foundry_agents import AGENT_NAMES, run_foundry_agent
 from src.orchestrator import build_decision_inputs, load_scenarios
+from src.observability import configure_foundry_tracer, set_span_attributes, traced_span
 from src.policy import evaluate_policy, load_policy
 from src.schemas import (
     AgentStatus,
@@ -36,8 +37,37 @@ def parse_json_response(text: str) -> dict[str, Any]:
     return value
 
 
-def invoke_validated(client, agent, prompt: str, model):
-    invocation = run_foundry_agent(client, agent, prompt)
+def invoke_validated(
+    client,
+    agent,
+    prompt: str,
+    model,
+    *,
+    tracer=None,
+    run_id: str,
+    scenario_id: str,
+    role: str,
+):
+    with traced_span(
+        tracer,
+        f"cascade_breaker.agent.{role}",
+        {
+            "cascade.run_id": run_id,
+            "cascade.scenario_id": scenario_id,
+            "cascade.agent_role": role,
+            "foundry.agent_name": str(agent.name),
+        },
+    ) as span:
+        invocation = run_foundry_agent(client, agent, prompt)
+        set_span_attributes(
+            span,
+            {
+                "foundry.response_id": invocation["response_id"],
+                "foundry.response_status": invocation["status"],
+                "foundry.model": invocation["model"],
+            },
+        )
+
     raw = invocation["output_text"]
     data = parse_json_response(raw)
     data["status"] = AgentStatus.COMPLETE.value
@@ -62,7 +92,6 @@ def invoke_validated(client, agent, prompt: str, model):
     }
     return validated, evidence
 
-
 def public_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     return {
         key: value
@@ -72,109 +101,163 @@ def public_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
+    run_id = str(uuid4())
     endpoint = os.environ["FOUNDRY_ENDPOINT"]
     client = AIProjectClient(
         endpoint=endpoint,
         credential=DefaultAzureCredential(),
     )
+    tracer = configure_foundry_tracer(client)
 
-    available = {a.name: a for a in client.agents.list()}
-    agents = {
-        role: available[name]
-        for role, name in AGENT_NAMES.items()
-    }
-
-    scenario_input = public_scenario(scenario)
-
-    scout, scout_invocation = invoke_validated(
-        client,
-        agents["scout"],
-        "Return JSON only with keys weak_signals, confidence, reason. "
-        "Do not authorize or execute actions.\n"
-        f"Scenario: {json.dumps(scenario_input)}",
-        ScoutState,
-    )
-
-    cascade, cascade_invocation = invoke_validated(
-        client,
-        agents["cascade"],
-        "Return JSON only with keys hypothesis, tipping_point_minutes, "
-        "proposed_action, confidence, reason. Do not authorize or execute actions.\n"
-        f"Scenario: {json.dumps(scenario_input)}\n"
-        f"Scout: {scout.model_dump_json()}",
-        CascadeState,
-    )
-
-    skeptic, skeptic_invocation = invoke_validated(
-        client,
-        agents["skeptic"],
-        "Return JSON only with keys verdict, false_positive_pattern, "
-        "alternative_hypothesis, contradictory_evidence, missing_evidence, reason. "
-        "verdict must be SUPPORT, CONTRADICT, or INSUFFICIENT. "
-        "Use false_positive_pattern only when evidence supports a known pattern. "
-        "You may block but cannot authorize or execute actions.\n"
-        f"Scenario: {json.dumps(scenario_input)}\n"
-        f"Scout: {scout.model_dump_json()}\n"
-        f"Cascade: {cascade.model_dump_json()}",
-        SkepticState,
-    )
-
-    governor, governor_invocation = invoke_validated(
-        client,
-        agents["governor"],
-        "Return JSON only with keys recommended_decision, confidence, reason. "
-        "recommended_decision must be ACT_AUTO, ACT_HUMAN, ABSTAIN, or VETO. "
-        "Your recommendation is advisory only; never claim authorization or execution.\n"
-        f"Scenario: {json.dumps(scenario_input)}\n"
-        f"Scout: {scout.model_dump_json()}\n"
-        f"Cascade: {cascade.model_dump_json()}\n"
-        f"Skeptic: {skeptic.model_dump_json()}",
-        GovernorState,
-    )
-
-    policy = load_policy()
-    state = DecisionState(
-        run_id=str(uuid4()),
-        scenario_id=scenario["scenario_id"],
-        started_at=datetime.now(timezone.utc),
-        policy=PolicyRef(
-            policy_id=policy["policy_id"],
-            policy_version=policy["policy_version"],
-        ),
-        evidence=Evidence(evidence_complete=True),
-        decision_inputs=build_decision_inputs(scenario),
-        agents=Agents(
-            scout=scout,
-            cascade=cascade,
-            skeptic=skeptic,
-            governor=governor,
-        ),
-    )
-
-    result = evaluate_policy(state, policy)
-    state.gate.decision = result.decision
-    state.gate.authorized = result.authorized
-    state.gate.reason_code = result.reason_code
-    state.final_decision = result.decision
-    state.completed_at = datetime.now(timezone.utc)
-
-    return {
-        "run_id": state.run_id,
-        "scenario_id": scenario["scenario_id"],
-        "synthetic": bool(scenario["synthetic"]),
-        "governor_recommendation": governor.recommended_decision.value,
-        "policy_decision": result.decision.value,
-        "authorized": result.authorized,
-        "reason_code": result.reason_code,
-        "foundry_invocations": {
-            "scout": scout_invocation,
-            "cascade": cascade_invocation,
-            "skeptic": skeptic_invocation,
-            "governor": governor_invocation,
+    with traced_span(
+        tracer,
+        "cascade_breaker.run",
+        {
+            "cascade.run_id": run_id,
+            "cascade.scenario_id": scenario["scenario_id"],
+            "cascade.synthetic": bool(scenario["synthetic"]),
         },
-        "state": state.model_dump(mode="json"),
-    }
+    ) as root_span:
+        available = {a.name: a for a in client.agents.list()}
+        agents = {
+            role: available[name]
+            for role, name in AGENT_NAMES.items()
+        }
 
+        scenario_input = public_scenario(scenario)
+
+        scout, scout_invocation = invoke_validated(
+            client,
+            agents["scout"],
+            "Return JSON only with keys weak_signals, confidence, reason. "
+            "Do not authorize or execute actions.\n"
+            f"Scenario: {json.dumps(scenario_input)}",
+            ScoutState,
+            tracer=tracer,
+            run_id=run_id,
+            scenario_id=scenario["scenario_id"],
+            role="scout",
+        )
+
+        cascade, cascade_invocation = invoke_validated(
+            client,
+            agents["cascade"],
+            "Return JSON only with keys hypothesis, tipping_point_minutes, "
+            "proposed_action, confidence, reason. Do not authorize or execute actions.\n"
+            f"Scenario: {json.dumps(scenario_input)}\n"
+            f"Scout: {scout.model_dump_json()}",
+            CascadeState,
+            tracer=tracer,
+            run_id=run_id,
+            scenario_id=scenario["scenario_id"],
+            role="cascade",
+        )
+
+        skeptic, skeptic_invocation = invoke_validated(
+            client,
+            agents["skeptic"],
+            "Return JSON only with keys verdict, false_positive_pattern, "
+            "alternative_hypothesis, contradictory_evidence, missing_evidence, reason. "
+            "verdict must be SUPPORT, CONTRADICT, or INSUFFICIENT. "
+            "Use false_positive_pattern only when evidence supports a known pattern. "
+            "You may block but cannot authorize or execute actions.\n"
+            f"Scenario: {json.dumps(scenario_input)}\n"
+            f"Scout: {scout.model_dump_json()}\n"
+            f"Cascade: {cascade.model_dump_json()}",
+            SkepticState,
+            tracer=tracer,
+            run_id=run_id,
+            scenario_id=scenario["scenario_id"],
+            role="skeptic",
+        )
+
+        governor, governor_invocation = invoke_validated(
+            client,
+            agents["governor"],
+            "Return JSON only with keys recommended_decision, confidence, reason. "
+            "recommended_decision must be ACT_AUTO, ACT_HUMAN, ABSTAIN, or VETO. "
+            "Your recommendation is advisory only; never claim authorization or execution.\n"
+            f"Scenario: {json.dumps(scenario_input)}\n"
+            f"Scout: {scout.model_dump_json()}\n"
+            f"Cascade: {cascade.model_dump_json()}\n"
+            f"Skeptic: {skeptic.model_dump_json()}",
+            GovernorState,
+            tracer=tracer,
+            run_id=run_id,
+            scenario_id=scenario["scenario_id"],
+            role="governor",
+        )
+
+        policy = load_policy()
+        state = DecisionState(
+            run_id=run_id,
+            scenario_id=scenario["scenario_id"],
+            started_at=datetime.now(timezone.utc),
+            policy=PolicyRef(
+                policy_id=policy["policy_id"],
+                policy_version=policy["policy_version"],
+            ),
+            evidence=Evidence(evidence_complete=True),
+            decision_inputs=build_decision_inputs(scenario),
+            agents=Agents(
+                scout=scout,
+                cascade=cascade,
+                skeptic=skeptic,
+                governor=governor,
+            ),
+        )
+
+        with traced_span(
+            tracer,
+            "cascade_breaker.deterministic_gate",
+            {
+                "cascade.run_id": run_id,
+                "cascade.scenario_id": scenario["scenario_id"],
+                "cascade.policy_id": policy["policy_id"],
+                "cascade.policy_version": policy["policy_version"],
+            },
+        ) as gate_span:
+            result = evaluate_policy(state, policy)
+            set_span_attributes(
+                gate_span,
+                {
+                    "cascade.policy_decision": result.decision.value,
+                    "cascade.authorized": result.authorized,
+                    "cascade.reason_code": result.reason_code,
+                },
+            )
+
+        state.gate.decision = result.decision
+        state.gate.authorized = result.authorized
+        state.gate.reason_code = result.reason_code
+        state.final_decision = result.decision
+        state.completed_at = datetime.now(timezone.utc)
+
+        set_span_attributes(
+            root_span,
+            {
+                "cascade.final_decision": result.decision.value,
+                "cascade.authorized": result.authorized,
+                "cascade.reason_code": result.reason_code,
+            },
+        )
+
+        return {
+            "run_id": state.run_id,
+            "scenario_id": scenario["scenario_id"],
+            "synthetic": bool(scenario["synthetic"]),
+            "governor_recommendation": governor.recommended_decision.value,
+            "policy_decision": result.decision.value,
+            "authorized": result.authorized,
+            "reason_code": result.reason_code,
+            "foundry_invocations": {
+                "scout": scout_invocation,
+                "cascade": cascade_invocation,
+                "skeptic": skeptic_invocation,
+                "governor": governor_invocation,
+            },
+            "state": state.model_dump(mode="json"),
+        }
 
 def main() -> int:
     scenario = load_scenarios()[0]
