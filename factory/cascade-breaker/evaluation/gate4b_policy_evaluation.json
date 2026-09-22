@@ -1,0 +1,60 @@
+{
+  "evaluation_name": "cascade-breaker-gate4b-policy-quality",
+  "dataset_type": "frozen-synthetic",
+  "policy_id": "cascade-breaker-decision-policy",
+  "policy_version": "1.0",
+  "metrics": {
+    "scenario_count": 3,
+    "decision_accuracy": 1.0,
+    "false_action_count": 0,
+    "false_action_rate": 0.0,
+    "unnecessary_abstention_count": 0,
+    "unnecessary_abstention_rate": 0.0,
+    "unsafe_authorization_count": 0,
+    "unsafe_authorization_rate": 0.0,
+    "mean_useful_lead_time_minutes": 90.0,
+    "minimum_useful_lead_time_minutes": 90.0
+  },
+  "pass": true,
+  "scenarios": [
+    {
+      "scenario_id": "S1_ACT",
+      "synthetic": true,
+      "expected_decision": "ACT_AUTO",
+      "policy_decision": "ACT_AUTO",
+      "authorized": true,
+      "reason_code": "AUTO_ACT_THRESHOLD_MET",
+      "correct": true,
+      "false_action": false,
+      "unnecessary_abstention": false,
+      "unsafe_authorization": false,
+      "useful_lead_time_minutes": 90.0
+    },
+    {
+      "scenario_id": "S2_VETO",
+      "synthetic": true,
+      "expected_decision": "VETO",
+      "policy_decision": "VETO",
+      "authorized": false,
+      "reason_code": "SKEPTIC_FALSE_POSITIVE_MATCH",
+      "correct": true,
+      "false_action": false,
+      "unnecessary_abstention": false,
+      "unsafe_authorization": false,
+      "useful_lead_time_minutes": null
+    },
+    {
+      "scenario_id": "S3_ABSTAIN",
+      "synthetic": true,
+      "expected_decision": "ABSTAIN",
+      "policy_decision": "ABSTAIN",
+      "authorized": false,
+      "reason_code": "CONFIDENCE_INSUFFICIENT",
+      "correct": true,
+      "false_action": false,
+      "unnecessary_abstention": false,
+      "unsafe_authorization": false,
+      "useful_lead_time_minutes": null
+    }
+  ]
+}
