@@ -41,7 +41,18 @@ def configure_foundry_tracer(project_client):
             "connection string is linked to the Foundry project."
         )
 
-    configure_azure_monitor(connection_string=connection_string)
+    sampling_ratio = float(
+        os.getenv("CASCADE_BREAKER_TRACE_SAMPLING_RATIO", "1.0")
+    )
+    if not 0.0 < sampling_ratio <= 1.0:
+        raise ValueError(
+            "CASCADE_BREAKER_TRACE_SAMPLING_RATIO must be > 0.0 and <= 1.0"
+        )
+
+    configure_azure_monitor(
+        connection_string=connection_string,
+        sampling_ratio=sampling_ratio,
+    )
     _TRACER = trace.get_tracer("cascade-breaker")
     return _TRACER
 
