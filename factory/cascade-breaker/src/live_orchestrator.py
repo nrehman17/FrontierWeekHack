@@ -12,7 +12,12 @@ from azure.identity import DefaultAzureCredential
 
 from src.foundry_agents import AGENT_NAMES, run_foundry_agent
 from src.orchestrator import build_decision_inputs, load_scenarios
-from src.observability import configure_foundry_tracer, set_span_attributes, traced_span
+from src.observability import (
+    configure_foundry_tracer,
+    flush_traces,
+    set_span_attributes,
+    traced_span,
+)
 from src.policy import evaluate_policy, load_policy
 from src.schemas import (
     AgentStatus,
@@ -263,6 +268,8 @@ def main() -> int:
     scenario = load_scenarios()[0]
     record = run_live_scenario(scenario)
     print(json.dumps(record, indent=2))
+    if not flush_traces():
+        raise RuntimeError("OpenTelemetry trace flush failed")
     return 0
 
 

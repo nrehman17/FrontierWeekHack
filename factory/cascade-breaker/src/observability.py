@@ -70,3 +70,17 @@ def traced_span(
     with tracer.start_as_current_span(name) as span:
         set_span_attributes(span, attributes or {})
         yield span
+
+def flush_traces(timeout_millis: int = 10000) -> bool:
+    """Force completed spans to the configured exporter before process exit."""
+    if not tracing_enabled():
+        return True
+
+    from opentelemetry import trace
+
+    provider = trace.get_tracer_provider()
+    force_flush = getattr(provider, "force_flush", None)
+    if not callable(force_flush):
+        return False
+
+    return bool(force_flush(timeout_millis=timeout_millis))
