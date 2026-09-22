@@ -61,13 +61,21 @@ def traced_span(
     tracer,
     name: str,
     attributes: dict[str, Any] | None = None,
+    *,
+    server_span: bool = False,
 ) -> Iterator[Any]:
     """Create a span when tracing is enabled; otherwise behave as a no-op."""
     if tracer is None:
         yield None
         return
 
-    with tracer.start_as_current_span(name) as span:
+    kwargs = {}
+    if server_span:
+        from opentelemetry.trace import SpanKind
+
+        kwargs["kind"] = SpanKind.SERVER
+
+    with tracer.start_as_current_span(name, **kwargs) as span:
         set_span_attributes(span, attributes or {})
         yield span
 

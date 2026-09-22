@@ -122,6 +122,7 @@ def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
             "cascade.scenario_id": scenario["scenario_id"],
             "cascade.synthetic": bool(scenario["synthetic"]),
         },
+        server_span=True,
     ) as root_span:
         available = {a.name: a for a in client.agents.list()}
         agents = {
