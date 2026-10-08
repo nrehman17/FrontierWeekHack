@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from src.agents import run_cascade, run_governor, run_scout, run_skeptic
+from src.evidence import AIClaim, validate_ai_claim
 from src.policy import evaluate_policy, load_policy
 from src.schemas import (
     ActionTier,
@@ -28,18 +29,37 @@ def load_scenarios() -> list[dict[str, Any]]:
         return json.load(handle)["scenarios"]
 
 
-def build_decision_inputs(scenario: dict[str, Any]) -> DecisionInputs:
-    predicted_lead = float(scenario["predicted_lead_minutes"])
+def build_decision_inputs(
+    scenario: dict[str, Any],
+    ai_claim: AIClaim | None = None,
+) -> DecisionInputs:
+    """
+    Build deterministic policy inputs.
+
+    AI may propose confidence and predicted lead time.
+    Core deterministically derives policy-owned fields.
+    """
+    if ai_claim is not None:
+        predicted_lead = float(ai_claim.predicted_lead_minutes)
+        confidence = float(ai_claim.confidence_p)
+    else:
+        predicted_lead = float(scenario["predicted_lead_minutes"])
+        confidence = float(scenario["confidence_p"])
+
     latency = float(scenario["action_latency_minutes"])
     safety_margin = float(scenario["safety_margin_minutes"])
     cf = float(scenario["false_action_cost_cf"])
     ci = float(scenario["inaction_cost_ci"])
 
-    usable_lead = max(0.0, predicted_lead - latency - safety_margin)
+    usable_lead = max(
+        0.0,
+        predicted_lead - latency - safety_margin,
+    )
+
     cf_ci_ratio = cf / ci if ci > 0 else float("inf")
 
     return DecisionInputs(
-        confidence_p=float(scenario["confidence_p"]),
+        confidence_p=confidence,
         predicted_lead_minutes=predicted_lead,
         action_latency_minutes=latency,
         safety_margin_minutes=safety_margin,
@@ -60,8 +80,22 @@ def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     skeptic = run_skeptic(scenario, cascade)
     governor = run_governor(scenario, scout, cascade, skeptic)
 
+    ai_claim = AIClaim(
+        confidence_p=float(cascade.confidence),
+        predicted_lead_minutes=float(cascade.tipping_point_minutes),
+        evidence_ids=["scenario_evidence"],
+    )
+
+    validate_ai_claim(
+        ai_claim,
+        {"scenario_evidence"},
+    )
+
     policy = load_policy()
-    decision_inputs = build_decision_inputs(scenario)
+    decision_inputs = build_decision_inputs(
+        scenario,
+        ai_claim=ai_claim,
+    )
 
     state = DecisionState(
         run_id=run_id,
