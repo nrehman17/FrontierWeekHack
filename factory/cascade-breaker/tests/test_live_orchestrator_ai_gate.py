@@ -143,6 +143,11 @@ def test_live_orchestrator_uses_cascade_output_for_gate_inputs(monkeypatch):
 
     record = live_orchestrator.run_live_scenario(scenario)
 
+    evidence = record["state"]["evidence"]
+
+    assert evidence["evidence_complete"] is False
+    assert evidence["missing_evidence"] == ["independent_observations"]
+
     inputs = record["state"]["decision_inputs"]
 
     assert inputs["confidence_p"] == 0.58
