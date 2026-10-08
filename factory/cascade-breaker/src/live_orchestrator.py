@@ -10,6 +10,7 @@ from uuid import uuid4
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
 
+from src.evidence import AIClaim, validate_ai_claim
 from src.foundry_agents import AGENT_NAMES, run_foundry_agent
 from src.orchestrator import build_decision_inputs, load_scenarios
 from src.observability import (
@@ -194,6 +195,16 @@ def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
             role="governor",
         )
 
+        ai_claim = AIClaim(
+            confidence_p=float(cascade.confidence),
+            predicted_lead_minutes=float(cascade.tipping_point_minutes),
+            evidence_ids=["scenario_evidence"],
+        )
+        validate_ai_claim(
+            ai_claim,
+            {"scenario_evidence"},
+        )
+
         policy = load_policy()
         state = DecisionState(
             run_id=run_id,
@@ -204,7 +215,10 @@ def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
                 policy_version=policy["policy_version"],
             ),
             evidence=Evidence(evidence_complete=True),
-            decision_inputs=build_decision_inputs(scenario),
+            decision_inputs=build_decision_inputs(
+                scenario,
+                ai_claim=ai_claim,
+            ),
             agents=Agents(
                 scout=scout,
                 cascade=cascade,
