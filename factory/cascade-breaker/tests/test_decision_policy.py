@@ -44,6 +44,9 @@ def make_state(
         ),
     )
 
+    # Positive support is explicit test-fixture setup, not a permissive runtime default.
+    state.agents.skeptic.verdict = SkepticVerdict.SUPPORT
+
     if skeptic_false_positive:
         state.agents.skeptic.verdict = SkepticVerdict.CONTRADICT
         state.agents.skeptic.false_positive_pattern = "stable-straggler"
@@ -215,9 +218,9 @@ def test_unregistered_skeptic_pattern_cannot_force_veto():
 
     result = evaluate_policy(state, load_policy())
 
-    assert result.decision == Decision.ACT_AUTO
-    assert result.authorized is True
-    assert result.reason_code == "AUTO_ACT_THRESHOLD_MET"
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "SKEPTIC_CONTRADICTS"
 
 
 def test_scenario_label_cannot_change_decision():
@@ -363,3 +366,91 @@ def test_t3_veto_keeps_precedence_when_evidence_is_incomplete():
     assert result.decision == Decision.VETO
     assert result.authorized is False
     assert result.reason_code == "T3_ACTION_PROHIBITED"
+
+
+
+def test_skeptic_insufficient_forces_abstain():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-SKEPTIC-INSUFFICIENT",
+        "BOUNDARY",
+        p=0.95,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+    state.agents.skeptic.verdict = SkepticVerdict.INSUFFICIENT
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "SKEPTIC_INSUFFICIENT"
+
+
+def test_missing_skeptic_verdict_forces_abstain():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-SKEPTIC-MISSING",
+        "BOUNDARY",
+        p=0.95,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+    state.agents.skeptic.verdict = None
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "SKEPTIC_INSUFFICIENT"
+
+
+def test_low_confidence_abstains_not_vetoes():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-LOW-CONFIDENCE",
+        "BOUNDARY",
+        p=0.39,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "CONFIDENCE_BELOW_MINIMUM"
+
+
+def test_inconsistent_cost_ratio_abstains():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-COST-RATIO-MISMATCH",
+        "BOUNDARY",
+        p=0.95,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+    state.decision_inputs.cf_ci_ratio = 0.001
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "INCONSISTENT_COST_RATIO"
