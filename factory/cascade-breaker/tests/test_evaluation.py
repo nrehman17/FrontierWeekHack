@@ -40,3 +40,29 @@ def test_synthetic_scenarios_define_separate_runtime_expectations():
     assert scenarios["S2_VETO"]["expected_runtime_decision"] == "VETO"
     assert scenarios["S3_ABSTAIN"]["expected_runtime_decision"] == "ABSTAIN"
     assert all(item["synthetic"] is True for item in scenarios.values())
+
+
+
+def test_sme_supplier_delay_fixtures_fail_closed_on_unverified_evidence():
+    import json
+    from pathlib import Path
+
+    fixture_path = Path(__file__).resolve().parents[1] / "data" / "sme_supplier_delay_scenarios.json"
+    dataset = json.loads(fixture_path.read_text(encoding="utf-8"))
+    scenarios = dataset["scenarios"]
+
+    assert dataset["dataset_type"] == "synthetic"
+    assert {item["variant"] for item in scenarios} == {
+        "early_warning", "late_warning", "false_alarm"
+    }
+    assert all(item["synthetic"] is True for item in scenarios)
+    assert all(item["expected_runtime_decision"] == "ABSTAIN" for item in scenarios)
+    assert all(
+        evidence["verified"] is False
+        for item in scenarios
+        for evidence in item["evidence"]
+    )
+    assert any(
+        "Human approval required before switching suppliers" in constraint
+        for constraint in dataset["shared_context"]["approval_constraints"]
+    )
