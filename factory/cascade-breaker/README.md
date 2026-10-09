@@ -14,7 +14,7 @@ Cascade Breaker is a prototype for recognizing when weak signals combine into a 
 4. **Governor** — synthesizes agent outputs into an advisory recommendation.
 5. **Deterministic policy gate** — applies policy rules and evidence-completeness checks. Language-model agents do not have final action authority.
 
-The runtime is designed to fail closed when critical evidence is incomplete. A high confidence score by itself is not enough to authorize an action.
+The runtime is designed to fail closed when critical evidence is incomplete. A high confidence score by itself is not enough to authorize an action. The Skeptic must explicitly return `SUPPORT` for policy evaluation to continue; `CONTRADICT`, `INSUFFICIENT`, or a missing verdict leads to `ABSTAIN`. A registered false-positive pattern can trigger a configured deterministic `VETO`. Low confidence maps to `ABSTAIN`, because uncertainty is not itself a policy prohibition. Cost ratios are recomputed from source cost inputs and inconsistent values fail closed.
 
 ## SME supplier-delay examples
 
@@ -95,7 +95,7 @@ If `CASCADE_BREAKER_TRACE=1` is set, configure the Foundry project's linked Appl
 - Deterministic tests on synthetic fixtures are not proof of production readiness.
 - Before a pilot, define authenticated source connectors, freshness and reconciliation rules, audit retention, human escalation ownership, and explicit approval boundaries.
 - Measure false actions, unnecessary abstentions, decision accuracy, and useful lead time on a reviewed evaluation set before claiming operational impact.
-- The test and live-evaluation roadmap is documented in [`EVALUATION_PLAN.md`](EVALUATION_PLAN.md). It defines decision semantics, adversarial and failure-mode test categories, metric definitions, reproducibility artifacts, and a proposed shadow-mode pilot; it does not claim those evaluations have already been completed.
+- The test and live-evaluation roadmap is documented in [`EVALUATION_PLAN.md`](EVALUATION_PLAN.md). It defines decision semantics, adversarial and failure-mode test categories, metric definitions, reproducibility artifacts, and a proposed shadow-mode pilot; it does not claim those evaluations have already been completed. Recovery and post-action verification requirements are documented in [`RECOVERY_WORKFLOW.md`](RECOVERY_WORKFLOW.md); execution, independent verification, and rollback are not implemented.
 
 ## Repository locations
 
@@ -109,4 +109,5 @@ If `CASCADE_BREAKER_TRACE=1` is set, configure the Foundry project's linked Appl
 - `data/critical_resource_resilience_scenarios.json` — synthetic cross-domain resource-risk cases
 - `CRITICAL_RESOURCE_RESILIENCE.md` — model and safety boundary for cross-domain cases
 - `EVALUATION_PLAN.md` — planned benchmark, metric definitions, failure-mode coverage and shadow-mode gate
+- `RECOVERY_WORKFLOW.md` — proposed post-action verification and recovery design; not implemented
 - `tests/` — policy and evaluation tests
