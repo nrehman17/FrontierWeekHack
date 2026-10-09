@@ -75,6 +75,65 @@ with st.expander("SME supplier-delay walkthrough · synthetic case study", expan
         "Do not switch suppliers or promise a delivery date without human approval."
     )
 
+
+# Cross-domain critical-resource scenarios are a separate, advisory-only
+# walkthrough. They never feed the policy replay or authorize operational action.
+CRITICAL_DATA_PATH = Path(__file__).resolve().parent / "data" / "critical_resource_resilience_scenarios.json"
+critical_dataset = json.loads(CRITICAL_DATA_PATH.read_text(encoding="utf-8"))
+critical_cases = critical_dataset["scenarios"]
+
+with st.expander("Critical-resource resilience · facilities, hospital oxygen, IPTV/OTT", expanded=False):
+    st.caption(
+        "Synthetic design walkthrough only. No live telemetry is connected; "
+        "time-to-impact is intentionally not calculated and every case remains ABSTAIN."
+    )
+    critical_case_id = st.selectbox(
+        "Choose critical-resource scenario",
+        [case["scenario_id"] for case in critical_cases],
+        format_func=lambda case_id: next(
+            case["title"] for case in critical_cases if case["scenario_id"] == case_id
+        ),
+        key="critical_resource_case",
+    )
+    critical_case = next(
+        case for case in critical_cases if case["scenario_id"] == critical_case_id
+    )
+    st.markdown(f"**Domain:** {critical_case['domain']}")
+    st.markdown(f"**Trigger:** {critical_case['trigger']}")
+    st.markdown(f"**Cascade hypothesis:** {critical_case['cascade_hypothesis']}")
+    st.warning(
+        f"Decision: {critical_case['decision']} — {critical_case['reason']}"
+    )
+
+    left_resource, right_resource = st.columns(2)
+    with left_resource:
+        st.markdown("**Illustrative observations — all unverified**")
+        st.dataframe(
+            [
+                {
+                    "Source": item["source"],
+                    "Claim": item["claim"],
+                    "Verified": "Yes" if item["verified"] else "No",
+                }
+                for item in critical_case["illustrative_observations"]
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+    with right_resource:
+        st.markdown("**Counter-evidence to check**")
+        for item in critical_case["counter_evidence_to_check"]:
+            st.write(f"• {item}")
+        st.markdown("**Recommended human response**")
+        for item in critical_case["recommended_human_response"]:
+            st.write(f"• {item}")
+
+    st.info(
+        "Time-to-impact: not calculated. Verify live measurements, timestamps, units, "
+        "source provenance, equipment limits and recovery/replenishment estimates first. "
+        "This walkthrough cannot authorize shutdowns, switching or clinical decisions."
+    )
+
 labels = {
     "S1_ACT": "🔥 Cost Cascade — intervention available",
     "S2_VETO": "🛑 Stable Straggler — false positive",
