@@ -19,7 +19,8 @@ st.title("⚡ Cascade Breaker")
 st.caption(
     "Predict the cascade. Challenge the hypothesis. "
     "Authorize only through a deterministic safety gate. "
-    "This UI is a deterministic demo replay; live Microsoft Foundry agent execution is verified separately."
+    "Demo replay is the default; optional Foundry live mode requires explicit confirmation. "
+    "Both currently use synthetic scenarios, not live operational telemetry."
 )
 
 scenarios = load_scenarios()
@@ -208,8 +209,6 @@ if st.button("Run Cascade Analysis", type="primary", use_container_width=True):
                 )
                 st.caption("Sensitive exception details are intentionally not shown in the UI.")
     else:
-        with st.spinner("Running deterministic demo agents…"):
-            pass
         scout = run_scout(scenario)
         cascade = run_cascade(scenario, scout)
         skeptic = run_skeptic(scenario, cascade)
