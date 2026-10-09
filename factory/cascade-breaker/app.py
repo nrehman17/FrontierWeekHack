@@ -1,5 +1,7 @@
+import json
 import streamlit as st
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from src.agents import run_scout, run_cascade, run_skeptic, run_governor
@@ -21,6 +23,57 @@ st.caption(
 )
 
 scenarios = load_scenarios()
+
+# Separate SME-facing walkthrough uses its own synthetic dataset. It is
+# explanatory only and does not feed unverified supplier data into policy.
+SME_DATA_PATH = Path(__file__).resolve().parent / "data" / "sme_supplier_delay_scenarios.json"
+sme_dataset = json.loads(SME_DATA_PATH.read_text(encoding="utf-8"))
+sme_cases = sme_dataset["scenarios"]
+
+with st.expander("SME supplier-delay walkthrough · synthetic case study", expanded=False):
+    st.caption(
+        "Illustrative small-manufacturer case. These records are synthetic and unverified; "
+        "this walkthrough is separate from the policy replay and cannot authorize action."
+    )
+    sme_case_id = st.selectbox(
+        "Choose supplier-delay situation",
+        [case["scenario_id"] for case in sme_cases],
+        format_func=lambda case_id: next(
+            case["title"] for case in sme_cases if case["scenario_id"] == case_id
+        ),
+        key="sme_supplier_case",
+    )
+    sme_case = next(case for case in sme_cases if case["scenario_id"] == sme_case_id)
+
+    st.markdown(f"**Risk hypothesis:** {sme_case['risk_hypothesis']}")
+    st.markdown(f"**Review timing:** {sme_case['next_review_deadline']}")
+    st.markdown("**Evidence to verify**")
+    st.dataframe(
+        [
+            {
+                "Source": item["source"],
+                "Observed": item["observed_at"],
+                "Claim": item["claim"],
+                "Verified": "Yes" if item["verified"] else "No",
+            }
+            for item in sme_case["evidence"]
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
+    left_sme, right_sme = st.columns(2)
+    with left_sme:
+        st.markdown("**Counter-evidence to check**")
+        for item in sme_case["counter_evidence_to_check"]:
+            st.write(f"• {item}")
+    with right_sme:
+        st.markdown("**Human next steps**")
+        for item in sme_dataset["shared_context"]["proposed_human_actions"]:
+            st.write(f"• {item}")
+    st.warning(
+        "Runtime posture: ABSTAIN — reconcile evidence and route for human review. "
+        "Do not switch suppliers or promise a delivery date without human approval."
+    )
 
 labels = {
     "S1_ACT": "🔥 Cost Cascade — intervention available",
