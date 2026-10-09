@@ -19,7 +19,8 @@
       "skeptic_verdict": "SUPPORT",
       "false_positive_pattern": null,
       "proposed_action": "route eligible traffic to lower-cost model tier",
-      "expected_decision": "ACT_AUTO"
+      "expected_decision": "ACT_AUTO",
+      "expected_runtime_decision": "ABSTAIN"
     },
     {
       "scenario_id": "S2_VETO",
@@ -40,7 +41,8 @@
       "skeptic_verdict": "CONTRADICT",
       "false_positive_pattern": "stable-straggler",
       "proposed_action": "reroute traffic away from suspected node",
-      "expected_decision": "VETO"
+      "expected_decision": "VETO",
+      "expected_runtime_decision": "VETO"
     },
     {
       "scenario_id": "S3_ABSTAIN",
@@ -61,7 +63,8 @@
       "skeptic_verdict": "INSUFFICIENT",
       "false_positive_pattern": null,
       "proposed_action": "prepare bounded routing intervention for human review",
-      "expected_decision": "ABSTAIN"
+      "expected_decision": "ABSTAIN",
+      "expected_runtime_decision": "ABSTAIN"
     }
   ]
 }
