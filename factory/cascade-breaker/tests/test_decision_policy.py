@@ -318,3 +318,48 @@ def test_skeptic_can_block_but_cannot_force_act():
 
     assert result.decision == Decision.ABSTAIN
     assert result.authorized is False
+
+
+def test_incomplete_evidence_blocks_otherwise_eligible_auto_act():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-INCOMPLETE-EVIDENCE",
+        "BOUNDARY",
+        p=0.95,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+    state.evidence.evidence_complete = False
+    state.evidence.missing_evidence = ["independent_observations"]
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "CRITICAL_EVIDENCE_INCOMPLETE"
+
+
+def test_t3_veto_keeps_precedence_when_evidence_is_incomplete():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-T3-INCOMPLETE-EVIDENCE",
+        "BOUNDARY",
+        p=0.99,
+        usable_lead=1000,
+        action_latency=1,
+        tier="T3",
+        cf=1,
+        ci=1000,
+    )
+    state.evidence.evidence_complete = False
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.VETO
+    assert result.authorized is False
+    assert result.reason_code == "T3_ACTION_PROHIBITED"
