@@ -96,7 +96,7 @@ def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
 
     # Uncertainty is not a prohibition. Low confidence therefore ABSTAINS;
     # VETO is reserved for deterministic prohibitions or registered veto rules.
-    if p < policy["veto"]["confidence_below"]:
+    if p < policy["abstain"]["minimum_confidence_for_evaluation"]:
         return PolicyResult(
             decision=Decision.ABSTAIN,
             authorized=False,
