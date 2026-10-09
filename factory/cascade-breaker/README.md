@@ -1,30 +1,34 @@
 # Cascade Breaker
 
-**SME operational resilience through early-warning analysis, adversarial review, and a deterministic action gate.**
+**Operational resilience through early-warning analysis, adversarial review, and a deterministic action gate.**
 
-Cascade Breaker is a prototype for helping a small business recognize when several weak signals may combine into a supplier or operational disruption. It separates AI-generated analysis from action authority: the agents may recommend, challenge, or veto, but a deterministic policy gate controls the final decision.
+Cascade Breaker is a prototype for recognizing when weak signals combine into a supplier or operational disruption. It separates AI-generated analysis from action authority: agents may recommend, challenge, or veto, but a deterministic policy gate controls the final decision.
 
-> **Prototype boundary:** The Streamlit screen is a deterministic replay over synthetic scenarios. It does not connect to live SME inventory, suppliers, customers, or production systems. The demo intentionally marks critical evidence as incomplete, so it cannot authorize an operational action.
+> **Prototype boundary:** The Streamlit screen is a deterministic replay over synthetic scenarios. It does not connect to live infrastructure, suppliers, hospitals, or production systems. Critical evidence is deliberately incomplete, so the demo cannot authorize consequential actions.
 
 ## What it demonstrates
 
-1. **Scout** — surfaces weak signals from the selected scenario.
-2. **Cascade** — forms a hypothesis about how those signals may develop and identifies a possible intervention window.
-3. **Skeptic** — challenges the hypothesis and checks for false-positive patterns or missing evidence.
-4. **Governor** — synthesizes the agent outputs into an advisory recommendation.
-5. **Deterministic policy gate** — applies policy rules and evidence-completeness checks. The language-model agents do not have final action authority.
+1. **Scout** — surfaces weak signals from a scenario.
+2. **Cascade** — forms a hypothesis about how signals may develop and identifies a possible intervention window.
+3. **Skeptic** — challenges the hypothesis and checks for false positives or missing evidence.
+4. **Governor** — synthesizes agent outputs into an advisory recommendation.
+5. **Deterministic policy gate** — applies policy rules and evidence-completeness checks. Language-model agents do not have final action authority.
 
 The runtime is designed to fail closed when critical evidence is incomplete. A high confidence score by itself is not enough to authorize an action.
 
 ## SME supplier-delay examples
 
-The file `data/sme_supplier_delay_scenarios.json` contains three **synthetic** cases:
+The file `data/sme_supplier_delay_scenarios.json` contains three **synthetic** cases: early warning, late warning, and a false alarm. The records remain `ABSTAIN` at runtime because their source records are unverified. Human approval is required before switching suppliers or making consequential customer commitments.
 
-- **Early warning:** a revised delivery estimate could threaten a Friday customer order, leaving time to verify stock and contact the supplier.
-- **Late warning:** a delay is reported close to the customer deadline, requiring immediate human review.
-- **False alarm:** conflicting supplier messages must be reconciled before the warning is cleared.
+## Cross-domain critical-resource resilience
 
-All three cases remain `ABSTAIN` at runtime because their source records are unverified. Human approval is required before switching suppliers, placing consequential commitments, or promising a delivery date.
+The files `data/critical_resource_resilience_scenarios.json` and `CRITICAL_RESOURCE_RESILIENCE.md` extend the design to three synthetic cases:
+
+- **IT park / critical facilities:** extended grid outage, diesel shortage, UPS/generator endurance, and dependencies such as server rooms, cooling, networking and life-safety systems.
+- **Hospital oxygen supply:** changing demand and uncertain replenishment, with clinical decisions reserved for authorised clinical teams.
+- **Broadcast / IPTV / OTT:** storm risk correlated with feed telemetry, headend dependencies and potential downstream service impact.
+
+These are design fixtures, not live telemetry or validated forecasts. The time-to-impact fields are intentionally unset until real, fresh, verified evidence and an approved calculation method exist. The scenarios fail closed. They do not authorize shutdowns, switching, medical allocation, patient ranking or treatment withdrawal.
 
 ## Run the demo locally
 
@@ -63,14 +67,14 @@ The GitHub Actions workflow runs these checks on relevant pushes and pull reques
 
 ## Live Microsoft Foundry path
 
-A separate live orchestration path is implemented in `src/live_orchestrator.py` and invokes the configured Foundry agents. It requires a correctly configured Foundry project endpoint, agent setup, Azure identity, and observability dependencies. The Streamlit replay does **not** invoke this path. Do not describe a live Foundry run as verified unless its invocation and trace evidence have been captured for the specific run.
+A separate live orchestration path is implemented in `src/live_orchestrator.py` and invokes configured Foundry agents. It requires a correctly configured Foundry project endpoint, agent setup, Azure identity, and observability dependencies. The Streamlit replay does **not** invoke this path. Do not describe a live Foundry run as verified unless its invocation and trace evidence have been captured for that run.
 
-## Current limitations and next validation steps
+## Current limitations and validation steps
 
-- Scenario inputs are synthetic; no real supplier, stock, or customer data is connected.
-- Source provenance and independent evidence completeness are not yet verified by a live integration.
-- The policy gate is tested with deterministic unit tests and synthetic fixtures; this is not proof of production readiness.
-- Before any pilot, define authenticated source connectors, freshness and reconciliation rules, audit retention, human escalation ownership, and an explicit approval boundary for each consequential action.
+- Scenario inputs are synthetic; no live inventory, weather, power, fuel, oxygen, broadcast or customer data is connected.
+- Source provenance and independent evidence completeness are not yet verified by live integration.
+- Deterministic tests on synthetic fixtures are not proof of production readiness.
+- Before a pilot, define authenticated source connectors, freshness and reconciliation rules, audit retention, human escalation ownership, and explicit approval boundaries.
 - Measure false actions, unnecessary abstentions, decision accuracy, and useful lead time on a reviewed evaluation set before claiming operational impact.
 
 ## Repository locations
@@ -82,4 +86,7 @@ A separate live orchestration path is implemented in `src/live_orchestrator.py` 
 - `src/schemas.py` — validated decision and agent data models
 - `data/scenarios.json` — core policy scenarios
 - `data/sme_supplier_delay_scenarios.json` — synthetic SME supplier-delay cases
+- `data/critical_resource_resilience_scenarios.json` — synthetic cross-domain resource-risk cases
+- `CRITICAL_RESOURCE_RESILIENCE.md` — model and safety boundary for cross-domain cases
 - `tests/` — policy and evaluation tests
+```
