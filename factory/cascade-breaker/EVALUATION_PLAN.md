@@ -10,7 +10,7 @@
 - **ACTHUMAN** — policy criteria support a recommendation that requires an authorized human decision. This is not execution authorization.
 - **ACTAUTO** — policy thresholds permit a bounded action only where that action class has been explicitly approved by policy. It must never be inferred from the Governor's recommendation alone.
 
-The deterministic policy gate—not a language-model agent—must assign the final state. In reporting, distinguish a policy VETO from an agent's skeptical disagreement; disagreement is input to the gate, not automatically a VETO unless a configured deterministic rule matches it.
+The deterministic policy gate—not a language-model agent—must assign the final state. In the current policy implementation, a registered Skeptic false-positive pattern triggers a deterministic VETO; a CONTRADICT, INSUFFICIENT, or missing Skeptic verdict otherwise forces ABSTAIN. SUPPORT is necessary but never sufficient for action. Low confidence is uncertainty and maps to ABSTAIN, not VETO. Keep these semantics under regression tests and version policy changes.
 
 ## 2. Evaluation layers
 
@@ -81,3 +81,8 @@ For clinical, life-safety, infrastructure, or other high-consequence settings, t
 ## 7. Current limitations
 
 The current synthetic fixtures and deterministic tests validate selected software invariants; they do not establish field accuracy, calibrated confidence, operational usefulness, or production readiness. The Microsoft Foundry live path and the deterministic demo replay are distinct execution modes and must be described and measured separately. No live operational telemetry or real-world shadow-mode results should be claimed until they have actually been collected and reviewed.
+
+
+## 8. Recovery and action execution status
+
+The recovery lifecycle is specified in [RECOVERY_WORKFLOW.md](RECOVERY_WORKFLOW.md), but is not implemented. The current gate does not execute actions, independently verify postconditions, or perform rollback. Treat `ACT_AUTO` only as a policy decision result. Do not describe it as completed execution or operational recovery.
