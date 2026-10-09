@@ -89,4 +89,3 @@ A separate live orchestration path is implemented in `src/live_orchestrator.py` 
 - `data/critical_resource_resilience_scenarios.json` — synthetic cross-domain resource-risk cases
 - `CRITICAL_RESOURCE_RESILIENCE.md` — model and safety boundary for cross-domain cases
 - `tests/` — policy and evaluation tests
-```
