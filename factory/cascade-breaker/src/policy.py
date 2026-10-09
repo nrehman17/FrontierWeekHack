@@ -1,9 +1,10 @@
 import json
+import math
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from src.schemas import ActionTier, Decision, DecisionState
+from src.schemas import ActionTier, Decision, DecisionState, SkepticVerdict
 
 
 class PolicyResult(BaseModel):
@@ -29,16 +30,43 @@ def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
     usable_lead = inputs.usable_lead_time_minutes
     latency = inputs.action_latency_minutes
     tier = inputs.action_tier
-    ratio = inputs.cf_ci_ratio
+    supplied_ratio = inputs.cf_ci_ratio
+    false_action_cost = inputs.false_action_cost_cf
+    inaction_cost = inputs.inaction_cost_ci
 
-    if p is None or usable_lead is None or latency is None or tier is None or ratio is None:
+    required = (p, usable_lead, latency, tier, supplied_ratio, false_action_cost, inaction_cost)
+    if any(value is None for value in required):
         return PolicyResult(
             decision=Decision.ABSTAIN,
             authorized=False,
             reason_code="REQUIRED_INPUT_MISSING",
         )
 
-    # Highest authority: hard VETO conditions.
+    numeric_values = (p, usable_lead, latency, supplied_ratio, false_action_cost, inaction_cost)
+    if any(not math.isfinite(value) for value in numeric_values):
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+            authorized=False,
+            reason_code="NON_FINITE_DECISION_INPUT",
+        )
+    if p < 0 or p > 1 or usable_lead < 0 or latency < 0 or false_action_cost < 0 or inaction_cost <= 0:
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+            authorized=False,
+            reason_code="INVALID_DECISION_INPUT",
+        )
+
+    # Recompute the ratio from its source values; never trust a contradictory
+    # precomputed ratio supplied by an upstream agent or caller.
+    ratio = false_action_cost / inaction_cost
+    if not math.isclose(supplied_ratio, ratio, rel_tol=1e-6, abs_tol=1e-9):
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+            authorized=False,
+            reason_code="INCONSISTENT_COST_RATIO",
+        )
+
+    # Highest authority: deterministic hard VETO conditions.
     if tier.value in policy["veto"]["prohibited_tiers"]:
         return PolicyResult(
             decision=Decision.VETO,
@@ -66,15 +94,31 @@ def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
             reason_code="SKEPTIC_FALSE_POSITIVE_MATCH",
         )
 
+    # Uncertainty is not a prohibition. Low confidence therefore ABSTAINS;
+    # VETO is reserved for deterministic prohibitions or registered veto rules.
     if p < policy["veto"]["confidence_below"]:
         return PolicyResult(
-            decision=Decision.VETO,
+            decision=Decision.ABSTAIN,
             authorized=False,
-            reason_code="CONFIDENCE_BELOW_VETO_THRESHOLD",
+            reason_code="CONFIDENCE_BELOW_MINIMUM",
+        )
+
+    # A model's skeptical assessment cannot authorize action. Contradiction,
+    # insufficient analysis, or a missing verdict requires abstention.
+    if skeptic.verdict != SkepticVerdict.SUPPORT:
+        reason = (
+            "SKEPTIC_CONTRADICTS"
+            if skeptic.verdict == SkepticVerdict.CONTRADICT
+            else "SKEPTIC_INSUFFICIENT"
+        )
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+            authorized=False,
+            reason_code=reason,
         )
 
     # Fail closed when required evidence has not been verified as complete.
-    # Keep existing hard vetoes above this check so their precedence is unchanged.
+    # Keep hard vetoes above this check so their precedence is unchanged.
     if not state.evidence.evidence_complete:
         return PolicyResult(
             decision=Decision.ABSTAIN,
@@ -104,7 +148,8 @@ def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
             reason_code="HUMAN_ACT_REQUIRED",
         )
 
-    # Auto ACT.
+    # Auto ACT. This authorizes only the policy outcome; it does not execute
+    # an operational action or establish that an action succeeded.
     auto = policy["auto_act"]
     if (
         tier == ActionTier(auto["required_tier"])
@@ -118,7 +163,6 @@ def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
             reason_code="AUTO_ACT_THRESHOLD_MET",
         )
 
-    # Evidence is plausible but one or more ACT gates were not met.
     return PolicyResult(
         decision=Decision.ABSTAIN,
         authorized=False,
