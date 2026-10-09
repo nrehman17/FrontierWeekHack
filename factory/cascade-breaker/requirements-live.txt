@@ -1,0 +1,4 @@
+-r requirements-demo.txt
+azure-ai-projects>=2.3.0,<3
+azure-identity>=1.17.0,<2
+azure-monitor-opentelemetry>=1.6.0,<2
