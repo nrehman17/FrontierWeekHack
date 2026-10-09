@@ -1,0 +1,100 @@
+{
+  "dataset_id": "critical-resource-resilience-v1",
+  "dataset_type": "synthetic",
+  "purpose": "Illustrate resource depletion, dependency cascades, and human-governed escalation across facilities, healthcare supply, and broadcast/OTT operations. Not for operational use.",
+  "safety_boundary": {
+    "live_data_connected": false,
+    "estimates_are_operationally_validated": false,
+    "autonomous_actions_permitted": false,
+    "clinical_triage_or_patient_allocation": false,
+    "rule": "Treat every value as illustrative. Verify live measurements, source provenance, units, timestamps, uncertainty, and responsible-owner approval before operational decisions."
+  },
+  "scenarios": [
+    {
+      "scenario_id": "FACILITY_DIESEL_CONSTRAINT",
+      "domain": "IT park / critical facilities",
+      "title": "Extended grid outage with diesel shortage",
+      "trigger": "Grid outage persists while diesel replenishment is delayed or uncertain.",
+      "resource": "Usable generator fuel and UPS endurance",
+      "synthetic": true,
+      "illustrative_observations": [
+        {"source": "generator_telemetry", "claim": "Fuel estimate indicates approximately 4 hours of runtime at current load", "verified": false},
+        {"source": "grid_operator_update", "claim": "Restoration estimate is 7–10 hours and not confirmed", "verified": false},
+        {"source": "fuel_supplier", "claim": "Delivery time is unconfirmed", "verified": false},
+        {"source": "facility_load_map", "claim": "Server rooms, cooling, fire protection and network equipment have critical dependencies", "verified": false}
+      ],
+      "cascade_hypothesis": "Backup endurance may expire before grid restoration or fuel replenishment, causing loss of multiple dependent services.",
+      "time_to_impact": {"value": null, "unit": "hours", "reason": "Must be calculated from fresh fuel, load, generator limits, UPS state and uncertainty; the 4-hour observation is illustrative only."},
+      "counter_evidence_to_check": [
+        "Confirm usable fuel level and consumption trend",
+        "Verify grid restoration updates independently",
+        "Confirm delivery and usable fuel quantity with supplier",
+        "Validate which loads and cooling systems share each power path"
+      ],
+      "recommended_human_response": [
+        "Escalate to the facility incident lead before the estimated endurance margin is breached",
+        "Validate a controlled load-shedding sequence that preserves life-safety and critical IT dependencies",
+        "Coordinate fuel supply and recovery updates across affected tenants"
+      ],
+      "decision": "ABSTAIN",
+      "reason": "All observations are synthetic and unverified; operational switching requires authorised facilities personnel."
+    },
+    {
+      "scenario_id": "HOSPITAL_OXYGEN_REPLENISHMENT_RISK",
+      "domain": "Hospital critical supply",
+      "title": "Oxygen replenishment may arrive after usable supply is depleted",
+      "trigger": "Hospital demand is elevated while a delivery is delayed or not independently confirmed.",
+      "resource": "Usable medical oxygen inventory and replenishment capacity",
+      "synthetic": true,
+      "illustrative_observations": [
+        {"source": "oxygen_tank_telemetry", "claim": "Illustrative usable supply estimate is 5 hours at the current measured consumption rate", "verified": false},
+        {"source": "supplier_dispatch", "claim": "Expected replenishment is in 7 hours but delivery is not confirmed", "verified": false},
+        {"source": "clinical_operations", "claim": "Demand may change and clinical reserve thresholds must be supplied by authorised hospital teams", "verified": false}
+      ],
+      "cascade_hypothesis": "If current consumption persists and delivery is late, the hospital may approach a critical supply threshold before replenishment.",
+      "time_to_impact": {"value": null, "unit": "hours", "reason": "Requires validated usable capacity, pressure/flow data, changing demand, reserve policy and delivery confidence; never use this fixture as a clinical estimate."},
+      "counter_evidence_to_check": [
+        "Verify telemetry, usable capacity and consumption trend",
+        "Confirm supplier dispatch, vehicle location and realistic arrival time",
+        "Check approved alternative supply and transfer arrangements",
+        "Obtain the hospital's current reserve and escalation thresholds"
+      ],
+      "recommended_human_response": [
+        "Immediately alert the authorised hospital incident lead and oxygen/facilities team when the validated margin is threatened",
+        "Coordinate emergency replenishment and approved contingency supply",
+        "Keep clinical triage and patient-care decisions with authorised clinicians under established protocols"
+      ],
+      "decision": "ABSTAIN",
+      "reason": "Synthetic and unverified evidence; no automated clinical triage, patient ranking, oxygen allocation or treatment withdrawal."
+    },
+    {
+      "scenario_id": "HEADEND_STORM_SIGNAL_RISK",
+      "domain": "Broadcast / IPTV / OTT",
+      "title": "Thunderstorm coincides with deteriorating contribution-feed quality",
+      "trigger": "Severe weather forecast overlaps a satellite reception or exposed contribution-link site.",
+      "resource": "Signal margin, feed redundancy and backup power",
+      "synthetic": true,
+      "illustrative_observations": [
+        {"source": "weather_feed", "claim": "Storm risk forecast near the reception site", "verified": false},
+        {"source": "rf_monitor", "claim": "Signal margin is trending down", "verified": false},
+        {"source": "transport_stream_monitor", "claim": "Continuity errors are increasing on one feed", "verified": false},
+        {"source": "redundancy_inventory", "claim": "Alternate feed availability and failover readiness are not yet confirmed", "verified": false}
+      ],
+      "cascade_hypothesis": "Weather-related feed degradation may progress into channel loss and downstream service interruption if the alternate path is unavailable.",
+      "time_to_impact": {"value": null, "unit": "minutes", "reason": "No fixed time is inferred from weather alone; estimate only after correlating live signal trends, error rates, redundancy and service dependencies."},
+      "counter_evidence_to_check": [
+        "Validate weather-site match and feed telemetry timestamps",
+        "Check whether errors originate in reception, encoding, packaging, DRM/CAS or distribution",
+        "Verify alternate feed and failover status",
+        "Map affected services and downstream regions"
+      ],
+      "recommended_human_response": [
+        "Alert broadcast operations and validate the fault domain",
+        "Prepare an authorised switch to a verified alternate feed if the evidence supports it",
+        "Monitor downstream channel, packaging and viewer-impact indicators"
+      ],
+      "decision": "ABSTAIN",
+      "reason": "Correlated signals are not yet independently verified; no automatic feed switching is authorised by this fixture."
+    }
+  ]
+}
