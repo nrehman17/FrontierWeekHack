@@ -342,5 +342,5 @@ if st.button("Run Cascade Analysis", type="primary", use_container_width=True):
             "Prior evaluation scores, if any, are not recomputed by this replay."
         )
 
-    else:
-        st.info("Choose a scenario and press **Run Cascade Analysis**.")
+else:
+    st.info("Choose a scenario and press **Run Cascade Analysis**.")
