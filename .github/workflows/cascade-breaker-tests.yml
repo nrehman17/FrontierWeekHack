@@ -32,3 +32,7 @@ jobs:
         env:
           PYTHONPATH: .
         run: python -m pytest -q
+      - name: Check fail-closed scenario runner
+        env:
+          PYTHONPATH: .
+        run: python -m src.orchestrator
