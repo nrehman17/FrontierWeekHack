@@ -95,6 +95,7 @@ If `CASCADE_BREAKER_TRACE=1` is set, configure the Foundry project's linked Appl
 - Deterministic tests on synthetic fixtures are not proof of production readiness.
 - Before a pilot, define authenticated source connectors, freshness and reconciliation rules, audit retention, human escalation ownership, and explicit approval boundaries.
 - Measure false actions, unnecessary abstentions, decision accuracy, and useful lead time on a reviewed evaluation set before claiming operational impact.
+- The test and live-evaluation roadmap is documented in [`EVALUATION_PLAN.md`](EVALUATION_PLAN.md). It defines decision semantics, adversarial and failure-mode test categories, metric definitions, reproducibility artifacts, and a proposed shadow-mode pilot; it does not claim those evaluations have already been completed.
 
 ## Repository locations
 
@@ -107,4 +108,5 @@ If `CASCADE_BREAKER_TRACE=1` is set, configure the Foundry project's linked Appl
 - `data/sme_supplier_delay_scenarios.json` — synthetic SME supplier-delay cases
 - `data/critical_resource_resilience_scenarios.json` — synthetic cross-domain resource-risk cases
 - `CRITICAL_RESOURCE_RESILIENCE.md` — model and safety boundary for cross-domain cases
+- `EVALUATION_PLAN.md` — planned benchmark, metric definitions, failure-mode coverage and shadow-mode gate
 - `tests/` — policy and evaluation tests
