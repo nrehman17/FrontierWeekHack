@@ -1,7 +1,9 @@
 """Deterministic quality evaluation for Cascade Breaker.
 
-Evaluates the frozen synthetic decision scenarios without invoking live agents
-and without writing to the operational ledger.
+Evaluates nominal policy outcomes on frozen synthetic fixtures, assuming the
+fixture inputs are complete enough to exercise the policy thresholds. This is
+not evidence-quality validation and does not authorize runtime actions. It does
+not invoke live agents or write to the operational ledger.
 """
 
 from __future__ import annotations
