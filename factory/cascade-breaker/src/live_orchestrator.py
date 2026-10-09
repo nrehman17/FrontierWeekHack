@@ -203,7 +203,10 @@ def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
                 policy_id=policy["policy_id"],
                 policy_version=policy["policy_version"],
             ),
-            evidence=Evidence(evidence_complete=True),
+            evidence=Evidence(
+                evidence_complete=False,
+                missing_evidence=["independent_observations", "validated_source_provenance"],
+            ),
             decision_inputs=build_decision_inputs(scenario),
             agents=Agents(
                 scout=scout,
