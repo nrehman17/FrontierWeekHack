@@ -45,6 +45,8 @@ if st.button("Run Cascade Analysis", type="primary", use_container_width=True):
     policy = load_policy()
     inputs = build_decision_inputs(scenario)
 
+    # The UI replay must use the same fail-closed evidence posture as the
+    # runtime orchestrator. Synthetic fixtures are not verified evidence.
     state = DecisionState(
         run_id=str(uuid4()),
         scenario_id=scenario["scenario_id"],
@@ -53,7 +55,13 @@ if st.button("Run Cascade Analysis", type="primary", use_container_width=True):
             policy_id=policy["policy_id"],
             policy_version=policy["policy_version"],
         ),
-        evidence=Evidence(evidence_complete=True),
+        evidence=Evidence(
+            evidence_complete=False,
+            missing_evidence=[
+                "independent_observations",
+                "validated_source_provenance",
+            ],
+        ),
         decision_inputs=inputs,
         agents=Agents(
             scout=scout,
@@ -118,6 +126,8 @@ if st.button("Run Cascade Analysis", type="primary", use_container_width=True):
 
             Policy evaluates confidence, intervention time,
             action tier, cost ratio and registered false-positive patterns.
+            The current replay uses synthetic fixtures, so critical evidence
+            is deliberately marked incomplete and cannot authorize an action.
             """
         )
 
@@ -125,7 +135,9 @@ if st.button("Run Cascade Analysis", type="primary", use_container_width=True):
             f"""Governor recommendation : {governor.recommended_decision.value}
 Deterministic decision   : {result.decision.value}
 Authorized               : {result.authorized}
-Reason                    : {result.reason_code}"""
+Reason                    : {result.reason_code}
+Evidence complete        : {state.evidence.evidence_complete}
+Missing evidence         : {", ".join(state.evidence.missing_evidence)}"""
         )
 
     with right:
@@ -143,17 +155,18 @@ Reason                    : {result.reason_code}"""
             f"{inputs.usable_lead_time_minutes:.0f} min",
         )
 
-    st.subheader("5 · Verified Evidence")
+    st.subheader("5 · Evidence and Demo Limits")
 
     e1, e2, e3, e4 = st.columns(4)
-    e1.metric("Decision benchmark", "3 / 3")
-    e2.metric("False-action rate", "0%")
-    e3.metric("Unsafe authorization", "0")
-    e4.metric("Regression tests", "13 / 13")
+    e1.metric("Scenarios in this demo", "3")
+    e2.metric("Evidence independently verified", "No")
+    e3.metric("Autonomous action authorized", "No")
+    e4.metric("Live system integration", "Not enabled")
 
     st.caption(
-        "Microsoft Foundry quality evaluation: "
-        "6/6 checks passed · Coherence avg 4.67/5 · Fluency avg 4.0/5"
+        "All scenarios in this replay are synthetic. The UI does not connect "
+        "to live infrastructure or independently verify source provenance. "
+        "Prior evaluation scores, if any, are not recomputed by this replay."
     )
 
 else:
