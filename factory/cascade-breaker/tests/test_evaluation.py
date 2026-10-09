@@ -27,3 +27,16 @@ def test_frozen_policy_quality_evaluation_passes():
 
     assert by_id["S3_ABSTAIN"]["policy_decision"] == "ABSTAIN"
     assert by_id["S3_ABSTAIN"]["authorized"] is False
+
+
+
+def test_synthetic_scenarios_define_separate_runtime_expectations():
+    from src.orchestrator import load_scenarios
+
+    scenarios = {item["scenario_id"]: item for item in load_scenarios()}
+
+    assert scenarios["S1_ACT"]["expected_decision"] == "ACT_AUTO"
+    assert scenarios["S1_ACT"]["expected_runtime_decision"] == "ABSTAIN"
+    assert scenarios["S2_VETO"]["expected_runtime_decision"] == "VETO"
+    assert scenarios["S3_ABSTAIN"]["expected_runtime_decision"] == "ABSTAIN"
+    assert all(item["synthetic"] is True for item in scenarios.values())
