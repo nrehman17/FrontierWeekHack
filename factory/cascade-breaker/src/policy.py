@@ -73,6 +73,15 @@ def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
             reason_code="CONFIDENCE_BELOW_VETO_THRESHOLD",
         )
 
+    # Fail closed when required evidence has not been verified as complete.
+    # Keep existing hard vetoes above this check so their precedence is unchanged.
+    if not state.evidence.evidence_complete:
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+            authorized=False,
+            reason_code="CRITICAL_EVIDENCE_INCOMPLETE",
+        )
+
     # Frozen ABSTAIN confidence band takes precedence over ACT evaluation.
     abstain = policy["abstain"]
     if abstain["min_confidence"] <= p < abstain["max_confidence_exclusive"]:
