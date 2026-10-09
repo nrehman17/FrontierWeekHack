@@ -72,7 +72,8 @@ def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
             policy_version=policy["policy_version"],
         ),
         evidence=Evidence(
-            evidence_complete=True,
+            evidence_complete=False,
+            missing_evidence=["independent_observations", "validated_source_provenance"],
         ),
         decision_inputs=decision_inputs,
         agents=Agents(
