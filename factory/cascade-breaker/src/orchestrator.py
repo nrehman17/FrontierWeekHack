@@ -93,11 +93,12 @@ def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         "scenario_id": scenario["scenario_id"],
         "synthetic": bool(scenario["synthetic"]),
         "expected_decision": scenario["expected_decision"],
+        "expected_runtime_decision": scenario["expected_runtime_decision"],
         "governor_recommendation": governor.recommended_decision.value,
         "policy_decision": result.decision.value,
         "authorized": result.authorized,
         "reason_code": result.reason_code,
-        "match": result.decision.value == scenario["expected_decision"],
+        "match": result.decision.value == scenario["expected_runtime_decision"],
         "state": state.model_dump(mode="json"),
     }
 
@@ -118,7 +119,8 @@ def main() -> int:
 
         print(
             f"{record['scenario_id']}: "
-            f"expected={record['expected_decision']} "
+            f"expected_runtime={record['expected_runtime_decision']} "
+            f"nominal={record['expected_decision']} "
             f"policy={record['policy_decision']} "
             f"authorized={record['authorized']} "
             f"match={record['match']}"
