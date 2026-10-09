@@ -65,9 +65,28 @@ PYTHONPATH=. python -m src.orchestrator
 
 The GitHub Actions workflow runs these checks on relevant pushes and pull requests.
 
-## Live Microsoft Foundry path
+## Live Microsoft Foundry mode
 
-A separate live orchestration path is implemented in `src/live_orchestrator.py` and invokes configured Foundry agents. It requires a correctly configured Foundry project endpoint, agent setup, Azure identity, and observability dependencies. The Streamlit replay does **not** invoke this path. Do not describe a live Foundry run as verified unless its invocation and trace evidence have been captured for that run.
+The Streamlit UI now offers **Deterministic demo replay** and **Microsoft Foundry live** modes. Demo replay remains the default. Live mode requires a separate checkbox confirmation before it makes four real Foundry model calls. If a live call fails, the UI shows an error and does not fall back to demo output.
+
+Live mode still uses a **synthetic scenario**, not live operational telemetry. It does not connect to supplier systems, weather feeds, power/fuel sensors, hospital systems or broadcast telemetry. The deterministic policy gate remains the final authority and the fixture's evidence is deliberately incomplete, so the expected posture is `ABSTAIN`.
+
+Install the optional live dependencies from this directory:
+
+```bash
+python -m pip install -r requirements-live.txt
+```
+
+Configure the Foundry project endpoint in the environment variable `FOUNDRY_ENDPOINT` (the project endpoint URL, not a model deployment URL). Sign in with an Azure identity supported by `DefaultAzureCredential`, for example with `az login`, and ensure that identity has permission to use the Foundry project. The following four versioned agents must already exist in the project:
+
+- `cascade-breaker-scout`
+- `cascade-breaker-cascade`
+- `cascade-breaker-skeptic`
+- `cascade-breaker-governor`
+
+Then launch `streamlit run app.py`, select **Microsoft Foundry live**, review the charge warning, and explicitly confirm the run. Four model invocations can incur charges according to your Azure deployment and pricing. Do not enable unattended live calls.
+
+If `CASCADE_BREAKER_TRACE=1` is set, configure the Foundry project's linked Application Insights connection and the optional tracing dependency; otherwise tracing is a no-op. Do not describe a live Foundry run as verified unless its invocation metadata and, when enabled, trace evidence have been captured for that run.
 
 ## Current limitations and validation steps
 
