@@ -34,7 +34,9 @@ def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
     false_action_cost = inputs.false_action_cost_cf
     inaction_cost = inputs.inaction_cost_ci
 
-    required = (p, usable_lead, latency, tier, supplied_ratio, false_action_cost, inaction_cost)
+    predicted_lead = inputs.predicted_lead_minutes
+    safety_margin = inputs.safety_margin_minutes
+    required = (p, predicted_lead, usable_lead, latency, safety_margin, tier, supplied_ratio, false_action_cost, inaction_cost)
     if any(value is None for value in required):
         return PolicyResult(
             decision=Decision.ABSTAIN,
@@ -42,18 +44,28 @@ def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
             reason_code="REQUIRED_INPUT_MISSING",
         )
 
-    numeric_values = (p, usable_lead, latency, supplied_ratio, false_action_cost, inaction_cost)
+    numeric_values = (p, predicted_lead, usable_lead, latency, safety_margin, supplied_ratio, false_action_cost, inaction_cost)
     if any(not math.isfinite(value) for value in numeric_values):
         return PolicyResult(
             decision=Decision.ABSTAIN,
             authorized=False,
             reason_code="NON_FINITE_DECISION_INPUT",
         )
-    if p < 0 or p > 1 or usable_lead < 0 or latency < 0 or false_action_cost < 0 or inaction_cost <= 0:
+    if p < 0 or p > 1 or predicted_lead < 0 or usable_lead < 0 or latency < 0 or safety_margin < 0 or false_action_cost < 0 or inaction_cost <= 0:
         return PolicyResult(
             decision=Decision.ABSTAIN,
             authorized=False,
             reason_code="INVALID_DECISION_INPUT",
+        )
+
+    # Do not trust an upstream usable-lead value. Recompute it from the
+    # predicted lead, action latency, and safety margin used by the policy.
+    expected_usable_lead = max(0.0, predicted_lead - latency - safety_margin)
+    if not math.isclose(usable_lead, expected_usable_lead, rel_tol=1e-6, abs_tol=1e-9):
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+            authorized=False,
+            reason_code="INCONSISTENT_LEAD_TIME",
         )
 
     # Recompute the ratio from its source values; never trust a contradictory
@@ -124,6 +136,39 @@ def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
             decision=Decision.ABSTAIN,
             authorized=False,
             reason_code="CRITICAL_EVIDENCE_INCOMPLETE",
+        )
+
+    # A boolean completeness flag is not provenance. Require the configured
+    # minimum number of distinct, allowlisted, non-synthetic source records.
+    evidence_policy = policy.get("evidence", {})
+    trusted_sources = {
+        str(source).strip().casefold()
+        for source in evidence_policy.get("trusted_sources", [])
+        if str(source).strip()
+    }
+    observations = state.evidence.observations
+    source_names = [
+        item.source.strip().casefold()
+        for item in observations
+        if item.source and item.source.strip() and not item.synthetic
+    ]
+    evidence_ids = [item.evidence_id.strip() for item in observations if item.evidence_id.strip()]
+    minimum_sources = int(evidence_policy.get("min_independent_sources", 2))
+    provenance_valid = (
+        minimum_sources >= 2
+        and bool(trusted_sources)
+        and len(observations) >= minimum_sources
+        and len(evidence_ids) == len(observations)
+        and len(set(evidence_ids)) == len(evidence_ids)
+        and len(source_names) == len(observations)
+        and len(set(source_names)) >= minimum_sources
+        and set(source_names).issubset(trusted_sources)
+    )
+    if not provenance_valid:
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+            authorized=False,
+            reason_code="EVIDENCE_PROVENANCE_UNVERIFIED",
         )
 
     # Frozen ABSTAIN confidence band takes precedence over ACT evaluation.
