@@ -44,6 +44,8 @@ def make_state(
         ),
     )
 
+    state.agents.skeptic.verdict = SkepticVerdict.SUPPORT
+
     if skeptic_false_positive:
         state.agents.skeptic.verdict = SkepticVerdict.CONTRADICT
         state.agents.skeptic.false_positive_pattern = "stable-straggler"
@@ -90,6 +92,50 @@ def test_s2_skeptic_false_positive_forces_veto():
     assert result.decision == Decision.VETO
     assert result.authorized is False
     assert result.reason_code == "SKEPTIC_FALSE_POSITIVE_MATCH"
+
+
+def test_low_confidence_veto_precedes_skeptic_contradiction():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-LOW-CONFIDENCE-CONTRADICT",
+        "BOUNDARY",
+        p=0.30,
+        usable_lead=90,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+    state.agents.skeptic.verdict = SkepticVerdict.CONTRADICT
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.VETO
+    assert result.authorized is False
+    assert result.reason_code == "CONFIDENCE_BELOW_VETO_THRESHOLD"
+
+
+def test_low_confidence_veto_precedes_skeptic_insufficient():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-LOW-CONFIDENCE-INSUFFICIENT",
+        "BOUNDARY",
+        p=0.30,
+        usable_lead=90,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+    state.agents.skeptic.verdict = SkepticVerdict.INSUFFICIENT
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.VETO
+    assert result.authorized is False
+    assert result.reason_code == "CONFIDENCE_BELOW_VETO_THRESHOLD"
 
 
 def test_s3_ambiguous_evidence_abstains():
@@ -215,9 +261,9 @@ def test_unregistered_skeptic_pattern_cannot_force_veto():
 
     result = evaluate_policy(state, load_policy())
 
-    assert result.decision == Decision.ACT_AUTO
-    assert result.authorized is True
-    assert result.reason_code == "AUTO_ACT_THRESHOLD_MET"
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "SKEPTIC_CONTRADICTS"
 
 
 def test_scenario_label_cannot_change_decision():

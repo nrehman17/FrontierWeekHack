@@ -3,7 +3,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from src.schemas import ActionTier, Decision, DecisionState
+from src.schemas import ActionTier, Decision, DecisionState, SkepticVerdict
 
 
 class PolicyResult(BaseModel):
@@ -71,6 +71,19 @@ def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
             decision=Decision.VETO,
             authorized=False,
             reason_code="CONFIDENCE_BELOW_VETO_THRESHOLD",
+        )
+
+    # The skeptic may block action but cannot authorize it.
+    if skeptic.verdict != SkepticVerdict.SUPPORT:
+        reason = (
+            "SKEPTIC_CONTRADICTS"
+            if skeptic.verdict == SkepticVerdict.CONTRADICT
+            else "SKEPTIC_INSUFFICIENT"
+        )
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+            authorized=False,
+            reason_code=reason,
         )
 
     # Frozen ABSTAIN confidence band takes precedence over ACT evaluation.
