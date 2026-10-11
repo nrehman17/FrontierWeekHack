@@ -6,9 +6,19 @@ from src.schemas import (
     DecisionInputs,
     DecisionState,
     Evidence,
+    EvidenceItem,
     PolicyRef,
     SkepticVerdict,
 )
+
+
+def test_policy():
+    # Test-only trusted source registry. Production config intentionally ships empty.
+    from src.policy import load_policy
+
+    policy = load_policy()
+    policy["evidence"]["trusted_sources"] = ["trusted-source-a", "trusted-source-b"]
+    return policy
 
 
 def make_state(
@@ -30,10 +40,30 @@ def make_state(
             policy_id="cascade-breaker-decision-policy",
             policy_version="1.0",
         ),
-        evidence=Evidence(evidence_complete=True),
+        evidence=Evidence(
+            observations=[
+                EvidenceItem(
+                    evidence_id="TEST-EVIDENCE-A",
+                    timestamp=datetime.now(timezone.utc),
+                    source="trusted-source-a",
+                    metric="test_metric_a",
+                    value=1.0,
+                    synthetic=False,
+                ),
+                EvidenceItem(
+                    evidence_id="TEST-EVIDENCE-B",
+                    timestamp=datetime.now(timezone.utc),
+                    source="trusted-source-b",
+                    metric="test_metric_b",
+                    value=1.0,
+                    synthetic=False,
+                ),
+            ],
+            evidence_complete=True,
+        ),
         decision_inputs=DecisionInputs(
             confidence_p=p,
-            predicted_lead_minutes=usable_lead,
+            predicted_lead_minutes=usable_lead + action_latency,
             action_latency_minutes=action_latency,
             safety_margin_minutes=0,
             usable_lead_time_minutes=usable_lead,
@@ -67,7 +97,7 @@ def test_s1_auto_act():
         ci=100,
     )
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision == Decision.ACT_AUTO
     assert result.authorized is True
@@ -88,7 +118,7 @@ def test_s2_skeptic_false_positive_forces_veto():
         skeptic_false_positive=True,
     )
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision == Decision.VETO
     assert result.authorized is False
@@ -108,7 +138,7 @@ def test_s3_ambiguous_evidence_abstains():
         ci=100,
     )
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision == Decision.ABSTAIN
     assert result.authorized is False
@@ -129,7 +159,7 @@ def test_below_auto_act_confidence_does_not_auto_act():
         ci=100,
     )
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision != Decision.ACT_AUTO
     assert result.authorized is False
@@ -149,7 +179,7 @@ def test_t3_always_vetoes():
         ci=1000,
     )
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision == Decision.VETO
     assert result.authorized is False
@@ -170,7 +200,7 @@ def test_cf_ci_above_limit_cannot_auto_act():
         ci=100,
     )
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision != Decision.ACT_AUTO
     assert result.authorized is False
@@ -191,7 +221,7 @@ def test_skeptic_veto_beats_very_high_confidence():
         skeptic_false_positive=True,
     )
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision == Decision.VETO
     assert result.authorized is False
@@ -216,7 +246,7 @@ def test_unregistered_skeptic_pattern_cannot_force_veto():
         "Synthetic scenario parameters driving overfitted conclusions based on weak signals."
     )
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision == Decision.ABSTAIN
     assert result.authorized is False
@@ -237,12 +267,12 @@ def test_scenario_label_cannot_change_decision():
         ci=100,
     )
 
-    first = evaluate_policy(state, load_policy())
+    first = evaluate_policy(state, test_policy())
 
     # Deliberately lie in the scenario label.
     state.scenario_id = "S2_VETO_EXPECTED"
 
-    second = evaluate_policy(state, load_policy())
+    second = evaluate_policy(state, test_policy())
 
     assert first.decision == Decision.ACT_AUTO
     assert second.decision == Decision.ACT_AUTO
@@ -267,7 +297,7 @@ def test_governor_cannot_force_act():
     state.agents.governor.recommended_decision = Decision.ACT_AUTO
     state.agents.governor.confidence = 0.99
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision == Decision.ABSTAIN
     assert result.authorized is False
@@ -288,14 +318,14 @@ def test_mutating_policy_input_changes_gate_result():
         ci=100,
     )
 
-    before = evaluate_policy(state, load_policy())
+    before = evaluate_policy(state, test_policy())
     assert before.decision == Decision.ACT_AUTO
 
     # Change a real gate input, not a label or LLM opinion.
     state.decision_inputs.false_action_cost_cf = 20
     state.decision_inputs.cf_ci_ratio = 0.20
 
-    after = evaluate_policy(state, load_policy())
+    after = evaluate_policy(state, test_policy())
 
     assert after.decision != Decision.ACT_AUTO
     assert after.authorized is False
@@ -317,7 +347,7 @@ def test_skeptic_can_block_but_cannot_force_act():
 
     state.agents.skeptic.verdict = SkepticVerdict.SUPPORT
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision == Decision.ABSTAIN
     assert result.authorized is False
@@ -339,7 +369,7 @@ def test_incomplete_evidence_blocks_otherwise_eligible_auto_act():
     state.evidence.evidence_complete = False
     state.evidence.missing_evidence = ["independent_observations"]
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision == Decision.ABSTAIN
     assert result.authorized is False
@@ -361,7 +391,7 @@ def test_t3_veto_keeps_precedence_when_evidence_is_incomplete():
     )
     state.evidence.evidence_complete = False
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision == Decision.VETO
     assert result.authorized is False
@@ -384,7 +414,7 @@ def test_skeptic_insufficient_forces_abstain():
     )
     state.agents.skeptic.verdict = SkepticVerdict.INSUFFICIENT
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision == Decision.ABSTAIN
     assert result.authorized is False
@@ -406,7 +436,7 @@ def test_missing_skeptic_verdict_forces_abstain():
     )
     state.agents.skeptic.verdict = None
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision == Decision.ABSTAIN
     assert result.authorized is False
@@ -427,7 +457,7 @@ def test_low_confidence_abstains_not_vetoes():
         ci=100,
     )
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision == Decision.ABSTAIN
     assert result.authorized is False
@@ -449,8 +479,89 @@ def test_inconsistent_cost_ratio_abstains():
     )
     state.decision_inputs.cf_ci_ratio = 0.001
 
-    result = evaluate_policy(state, load_policy())
+    result = evaluate_policy(state, test_policy())
 
     assert result.decision == Decision.ABSTAIN
     assert result.authorized is False
     assert result.reason_code == "INCONSISTENT_COST_RATIO"
+
+
+def test_boolean_evidence_complete_without_source_records_abstains():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-EVIDENCE-EMPTY", "BOUNDARY",
+        p=0.95, usable_lead=120, action_latency=30, tier="T1", cf=5, ci=100,
+    )
+    state.evidence.observations = []
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "EVIDENCE_PROVENANCE_UNVERIFIED"
+
+
+def test_duplicate_evidence_ids_abstain():
+    from src.policy import evaluate_policy
+
+    state = make_state(
+        "TEST-EVIDENCE-DUPLICATE", "BOUNDARY",
+        p=0.95, usable_lead=120, action_latency=30, tier="T1", cf=5, ci=100,
+    )
+    state.evidence.observations[1].evidence_id = state.evidence.observations[0].evidence_id
+
+    result = evaluate_policy(state, test_policy())
+
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "EVIDENCE_PROVENANCE_UNVERIFIED"
+
+
+def test_unallowlisted_source_cannot_establish_provenance():
+    from src.policy import evaluate_policy
+
+    state = make_state(
+        "TEST-EVIDENCE-UNTRUSTED", "BOUNDARY",
+        p=0.95, usable_lead=120, action_latency=30, tier="T1", cf=5, ci=100,
+    )
+    state.evidence.observations[1].source = "caller-invented-source"
+
+    result = evaluate_policy(state, test_policy())
+
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "EVIDENCE_PROVENANCE_UNVERIFIED"
+
+
+def test_usable_lead_cannot_be_inflated_independently_of_source_inputs():
+    from src.policy import evaluate_policy
+
+    state = make_state(
+        "TEST-LEAD-INFLATION", "BOUNDARY",
+        p=0.95, usable_lead=120, action_latency=30, tier="T1", cf=5, ci=100,
+    )
+    state.decision_inputs.usable_lead_time_minutes = 9999
+
+    result = evaluate_policy(state, test_policy())
+
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "INCONSISTENT_LEAD_TIME"
+
+
+def test_synthetic_records_cannot_be_promoted_by_completeness_flag():
+    from src.policy import evaluate_policy
+
+    state = make_state(
+        "TEST-SYNTHETIC-PROMOTION", "BOUNDARY",
+        p=0.95, usable_lead=120, action_latency=30, tier="T1", cf=5, ci=100,
+    )
+    for item in state.evidence.observations:
+        item.synthetic = True
+
+    result = evaluate_policy(state, test_policy())
+
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "EVIDENCE_PROVENANCE_UNVERIFIED"
