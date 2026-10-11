@@ -20,6 +20,7 @@ from src.schemas import (
     Decision,
     DecisionState,
     Evidence,
+    EvidenceItem,
     PolicyRef,
     SkepticVerdict,
 )
@@ -42,7 +43,27 @@ def evaluate_scenario(scenario: dict[str, Any], policy: dict) -> dict[str, Any]:
             policy_id=policy["policy_id"],
             policy_version=policy["policy_version"],
         ),
-        evidence=Evidence(evidence_complete=True),
+        evidence=Evidence(
+            observations=[
+                EvidenceItem(
+                    evidence_id="EVAL-" + scenario["scenario_id"] + "-A",
+                    timestamp=datetime.now(timezone.utc),
+                    source="evaluation-source-a",
+                    metric="fixture_metric_a",
+                    value=1.0,
+                    synthetic=False,
+                ),
+                EvidenceItem(
+                    evidence_id="EVAL-" + scenario["scenario_id"] + "-B",
+                    timestamp=datetime.now(timezone.utc),
+                    source="evaluation-source-b",
+                    metric="fixture_metric_b",
+                    value=1.0,
+                    synthetic=False,
+                ),
+            ],
+            evidence_complete=True,
+        ),
         decision_inputs=build_decision_inputs(scenario),
     )
 
@@ -50,6 +71,11 @@ def evaluate_scenario(scenario: dict[str, Any], policy: dict) -> dict[str, Any]:
     state.agents.skeptic.verdict = SkepticVerdict(scenario["skeptic_verdict"])
     state.agents.skeptic.false_positive_pattern = scenario["false_positive_pattern"]
 
+    # Test-only sources exercise threshold behavior; this is not production evidence.
+    policy = {**policy, "evidence": {
+        "min_independent_sources": 2,
+        "trusted_sources": ["evaluation-source-a", "evaluation-source-b"],
+    }}
     result = evaluate_policy(state, policy)
 
     expected = Decision(scenario["expected_decision"])
