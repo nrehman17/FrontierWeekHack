@@ -19,6 +19,10 @@
     "last_call_tipping_point_minutes": 30,
     "minimum_confidence_for_evaluation": 0.4
   },
+  "evidence": {
+    "min_independent_sources": 2,
+    "trusted_sources": []
+  },
   "veto": {
     "prohibited_tiers": [
       "T3"
