@@ -1,0 +1,649 @@
+=== CASCADE BREAKER GATE 4B EVALUATION INPUT ===
+
+=== GIT HEAD ===
+e6ed4ba2db0c4bd582ed845f8f603b3555fa9d50
+
+=== data/scenarios.json ===
+{
+  "scenarios": [
+    {
+      "scenario_id": "S1_ACT",
+      "title": "Meter margin cascade",
+      "synthetic": true,
+      "weak_signals": [
+        "context tokens per session rising",
+        "provider inference price increased",
+        "cache hit rate declining"
+      ],
+      "confidence_p": 0.83,
+      "predicted_lead_minutes": 120,
+      "action_latency_minutes": 15,
+      "safety_margin_minutes": 15,
+      "action_tier": "T1",
+      "false_action_cost_cf": 5,
+      "inaction_cost_ci": 100,
+      "skeptic_verdict": "SUPPORT",
+      "false_positive_pattern": null,
+      "proposed_action": "route eligible traffic to lower-cost model tier",
+      "expected_decision": "ACT_AUTO"
+    },
+    {
+      "scenario_id": "S2_VETO",
+      "title": "Steady-state straggler",
+      "synthetic": true,
+      "weak_signals": [
+        "single slow node observed",
+        "latency remains stable for six hours",
+        "no correlated cost acceleration"
+      ],
+      "confidence_p": 0.72,
+      "predicted_lead_minutes": 90,
+      "action_latency_minutes": 15,
+      "safety_margin_minutes": 15,
+      "action_tier": "T1",
+      "false_action_cost_cf": 5,
+      "inaction_cost_ci": 100,
+      "skeptic_verdict": "CONTRADICT",
+      "false_positive_pattern": "stable-straggler",
+      "proposed_action": "reroute traffic away from suspected node",
+      "expected_decision": "VETO"
+    },
+    {
+      "scenario_id": "S3_ABSTAIN",
+      "title": "Ambiguous cost drift",
+      "synthetic": true,
+      "weak_signals": [
+        "cost per session drifting upward",
+        "cache efficiency fluctuating",
+        "demand mix uncertain"
+      ],
+      "confidence_p": 0.50,
+      "predicted_lead_minutes": 75,
+      "action_latency_minutes": 15,
+      "safety_margin_minutes": 15,
+      "action_tier": "T2",
+      "false_action_cost_cf": 20,
+      "inaction_cost_ci": 100,
+      "skeptic_verdict": "INSUFFICIENT",
+      "false_positive_pattern": null,
+      "proposed_action": "prepare bounded routing intervention for human review",
+      "expected_decision": "ABSTAIN"
+    }
+  ]
+}
+
+
+=== src/orchestrator.py ===
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from src.agents import run_cascade, run_governor, run_scout, run_skeptic
+from src.policy import evaluate_policy, load_policy
+from src.schemas import (
+    ActionTier,
+    Agents,
+    DecisionInputs,
+    DecisionState,
+    Evidence,
+    PolicyRef,
+)
+
+
+ROOT = Path(__file__).resolve().parent.parent
+SCENARIOS_PATH = ROOT / "data" / "scenarios.json"
+LEDGER_PATH = ROOT / "ledger" / "runs.jsonl"
+
+
+def load_scenarios() -> list[dict[str, Any]]:
+    with SCENARIOS_PATH.open("r", encoding="utf-8") as handle:
+        return json.load(handle)["scenarios"]
+
+
+def build_decision_inputs(scenario: dict[str, Any]) -> DecisionInputs:
+    predicted_lead = float(scenario["predicted_lead_minutes"])
+    latency = float(scenario["action_latency_minutes"])
+    safety_margin = float(scenario["safety_margin_minutes"])
+    cf = float(scenario["false_action_cost_cf"])
+    ci = float(scenario["inaction_cost_ci"])
+
+    usable_lead = max(0.0, predicted_lead - latency - safety_margin)
+    cf_ci_ratio = cf / ci if ci > 0 else float("inf")
+
+    return DecisionInputs(
+        confidence_p=float(scenario["confidence_p"]),
+        predicted_lead_minutes=predicted_lead,
+        action_latency_minutes=latency,
+        safety_margin_minutes=safety_margin,
+        usable_lead_time_minutes=usable_lead,
+        action_tier=ActionTier(scenario["action_tier"]),
+        false_action_cost_cf=cf,
+        inaction_cost_ci=ci,
+        cf_ci_ratio=cf_ci_ratio,
+    )
+
+
+def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
+    run_id = str(uuid4())
+    started_at = datetime.now(timezone.utc)
+
+    scout = run_scout(scenario)
+    cascade = run_cascade(scenario, scout)
+    skeptic = run_skeptic(scenario, cascade)
+    governor = run_governor(scenario, scout, cascade, skeptic)
+
+    policy = load_policy()
+    decision_inputs = build_decision_inputs(scenario)
+
+    state = DecisionState(
+        run_id=run_id,
+        scenario_id=scenario["scenario_id"],
+        started_at=started_at,
+        policy=PolicyRef(
+            policy_id=policy["policy_id"],
+            policy_version=policy["policy_version"],
+        ),
+        evidence=Evidence(
+            evidence_complete=True,
+        ),
+        decision_inputs=decision_inputs,
+        agents=Agents(
+            scout=scout,
+            cascade=cascade,
+            skeptic=skeptic,
+            governor=governor,
+        ),
+    )
+
+    result = evaluate_policy(state, policy)
+    state.final_decision = result.decision
+    state.completed_at = datetime.now(timezone.utc)
+
+    record = {
+        "run_id": run_id,
+        "scenario_id": scenario["scenario_id"],
+        "synthetic": bool(scenario["synthetic"]),
+        "expected_decision": scenario["expected_decision"],
+        "governor_recommendation": governor.recommended_decision.value,
+        "policy_decision": result.decision.value,
+        "authorized": result.authorized,
+        "reason_code": result.reason_code,
+        "match": result.decision.value == scenario["expected_decision"],
+        "state": state.model_dump(mode="json"),
+    }
+
+    LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with LEDGER_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+    return record
+
+
+def main() -> int:
+    scenarios = load_scenarios()
+    all_match = True
+
+    for scenario in scenarios:
+        record = run_scenario(scenario)
+        all_match = all_match and record["match"]
+
+        print(
+            f"{record['scenario_id']}: "
+            f"expected={record['expected_decision']} "
+            f"policy={record['policy_decision']} "
+            f"authorized={record['authorized']} "
+            f"match={record['match']}"
+        )
+
+    return 0 if all_match else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+=== src/policy.py ===
+import json
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict
+
+from src.schemas import ActionTier, Decision, DecisionState
+
+
+class PolicyResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Decision
+    authorized: bool
+    reason_code: str
+
+
+def load_policy() -> dict:
+    policy_path = Path(__file__).resolve().parent.parent / "decision_policy.json"
+
+    with policy_path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
+    inputs = state.decision_inputs
+    skeptic = state.agents.skeptic
+
+    p = inputs.confidence_p
+    usable_lead = inputs.usable_lead_time_minutes
+    latency = inputs.action_latency_minutes
+    tier = inputs.action_tier
+    ratio = inputs.cf_ci_ratio
+
+    if p is None or usable_lead is None or latency is None or tier is None or ratio is None:
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+            authorized=False,
+            reason_code="REQUIRED_INPUT_MISSING",
+        )
+
+    # Highest authority: hard VETO conditions.
+    if tier.value in policy["veto"]["prohibited_tiers"]:
+        return PolicyResult(
+            decision=Decision.VETO,
+            authorized=False,
+            reason_code="T3_ACTION_PROHIBITED",
+        )
+
+    known_false_positive_patterns = {
+        str(pattern).strip().casefold()
+        for pattern in policy["veto"].get("known_false_positive_patterns", [])
+    }
+    skeptic_false_positive_pattern = (
+        skeptic.false_positive_pattern.strip().casefold()
+        if skeptic.false_positive_pattern
+        else None
+    )
+
+    if (
+        policy["veto"]["skeptic_false_positive_match"]
+        and skeptic_false_positive_pattern in known_false_positive_patterns
+    ):
+        return PolicyResult(
+            decision=Decision.VETO,
+            authorized=False,
+            reason_code="SKEPTIC_FALSE_POSITIVE_MATCH",
+        )
+
+    if p < policy["veto"]["confidence_below"]:
+        return PolicyResult(
+            decision=Decision.VETO,
+            authorized=False,
+            reason_code="CONFIDENCE_BELOW_VETO_THRESHOLD",
+        )
+
+    # Frozen ABSTAIN confidence band takes precedence over ACT evaluation.
+    abstain = policy["abstain"]
+    if abstain["min_confidence"] <= p < abstain["max_confidence_exclusive"]:
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+            authorized=False,
+            reason_code="CONFIDENCE_INSUFFICIENT",
+        )
+
+    # Human ACT.
+    human = policy["human_act"]
+    if (
+        tier == ActionTier(human["required_tier"])
+        and p >= human["min_confidence"]
+        and usable_lead >= human["min_usable_lead_minutes"]
+    ):
+        return PolicyResult(
+            decision=Decision.ACT_HUMAN,
+            authorized=False,
+            reason_code="HUMAN_ACT_REQUIRED",
+        )
+
+    # Auto ACT.
+    auto = policy["auto_act"]
+    if (
+        tier == ActionTier(auto["required_tier"])
+        and p >= auto["min_confidence"]
+        and usable_lead >= auto["min_lead_latency_multiple"] * latency
+        and ratio <= auto["max_cf_ci_ratio"]
+    ):
+        return PolicyResult(
+            decision=Decision.ACT_AUTO,
+            authorized=True,
+            reason_code="AUTO_ACT_THRESHOLD_MET",
+        )
+
+    # Evidence is plausible but one or more ACT gates were not met.
+    return PolicyResult(
+        decision=Decision.ABSTAIN,
+        authorized=False,
+        reason_code="ACT_GATE_NOT_MET",
+    )
+
+
+=== tests/test_decision_policy.py ===
+from datetime import datetime, timezone
+
+from src.schemas import (
+    ActionTier,
+    Decision,
+    DecisionInputs,
+    DecisionState,
+    Evidence,
+    PolicyRef,
+    SkepticVerdict,
+)
+
+
+def make_state(
+    run_id,
+    scenario_id,
+    p,
+    usable_lead,
+    action_latency,
+    tier,
+    cf,
+    ci,
+    skeptic_false_positive=False,
+):
+    state = DecisionState(
+        run_id=run_id,
+        scenario_id=scenario_id,
+        started_at=datetime.now(timezone.utc),
+        policy=PolicyRef(
+            policy_id="cascade-breaker-decision-policy",
+            policy_version="1.0",
+        ),
+        evidence=Evidence(evidence_complete=True),
+        decision_inputs=DecisionInputs(
+            confidence_p=p,
+            predicted_lead_minutes=usable_lead,
+            action_latency_minutes=action_latency,
+            safety_margin_minutes=0,
+            usable_lead_time_minutes=usable_lead,
+            action_tier=ActionTier(tier),
+            false_action_cost_cf=cf,
+            inaction_cost_ci=ci,
+            cf_ci_ratio=cf / ci,
+        ),
+    )
+
+    if skeptic_false_positive:
+        state.agents.skeptic.verdict = SkepticVerdict.CONTRADICT
+        state.agents.skeptic.false_positive_pattern = "stable-straggler"
+
+    return state
+
+
+def test_s1_auto_act():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-S1-ACT", "S1_ACT",
+        p=0.83,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.ACT_AUTO
+    assert result.authorized is True
+    assert result.reason_code == "AUTO_ACT_THRESHOLD_MET"
+
+
+def test_s2_skeptic_false_positive_forces_veto():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-S2-VETO", "S2_VETO",
+        p=0.87,
+        usable_lead=180,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+        skeptic_false_positive=True,
+    )
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.VETO
+    assert result.authorized is False
+    assert result.reason_code == "SKEPTIC_FALSE_POSITIVE_MATCH"
+
+
+def test_s3_ambiguous_evidence_abstains():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-S3-ABSTAIN", "S3_ABSTAIN",
+        p=0.50,
+        usable_lead=90,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "CONFIDENCE_INSUFFICIENT"
+
+
+def test_below_auto_act_confidence_does_not_auto_act():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-BOUNDARY-P",
+        "BOUNDARY",
+        p=0.799999,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision != Decision.ACT_AUTO
+    assert result.authorized is False
+
+
+def test_t3_always_vetoes():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-T3",
+        "BOUNDARY",
+        p=0.99,
+        usable_lead=1000,
+        action_latency=1,
+        tier="T3",
+        cf=1,
+        ci=1000,
+    )
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.VETO
+    assert result.authorized is False
+    assert result.reason_code == "T3_ACTION_PROHIBITED"
+
+
+def test_cf_ci_above_limit_cannot_auto_act():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-ECONOMICS",
+        "BOUNDARY",
+        p=0.95,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=11,
+        ci=100,
+    )
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision != Decision.ACT_AUTO
+    assert result.authorized is False
+
+
+def test_skeptic_veto_beats_very_high_confidence():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-SKEPTIC-AUTHORITY",
+        "BOUNDARY",
+        p=0.99,
+        usable_lead=1000,
+        action_latency=1,
+        tier="T1",
+        cf=1,
+        ci=1000,
+        skeptic_false_positive=True,
+    )
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.VETO
+    assert result.authorized is False
+    assert result.reason_code == "SKEPTIC_FALSE_POSITIVE_MATCH"
+
+
+def test_unregistered_skeptic_pattern_cannot_force_veto():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-UNREGISTERED-SKEPTIC-PATTERN",
+        "S1_ACT",
+        p=0.83,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+    state.agents.skeptic.verdict = SkepticVerdict.CONTRADICT
+    state.agents.skeptic.false_positive_pattern = (
+        "Synthetic scenario parameters driving overfitted conclusions based on weak signals."
+    )
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.ACT_AUTO
+    assert result.authorized is True
+    assert result.reason_code == "AUTO_ACT_THRESHOLD_MET"
+
+
+def test_scenario_label_cannot_change_decision():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-LABEL-LEAK",
+        "S1_ACT",
+        p=0.83,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+
+    first = evaluate_policy(state, load_policy())
+
+    # Deliberately lie in the scenario label.
+    state.scenario_id = "S2_VETO_EXPECTED"
+
+    second = evaluate_policy(state, load_policy())
+
+    assert first.decision == Decision.ACT_AUTO
+    assert second.decision == Decision.ACT_AUTO
+    assert first.reason_code == second.reason_code
+
+
+def test_governor_cannot_force_act():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-GOVERNOR-NO-AUTHORITY",
+        "MUTATION",
+        p=0.50,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+
+    # Simulate an LLM Governor demanding ACT.
+    state.agents.governor.recommended_decision = Decision.ACT_AUTO
+    state.agents.governor.confidence = 0.99
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "CONFIDENCE_INSUFFICIENT"
+
+
+def test_mutating_policy_input_changes_gate_result():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-POLICY-MUTATION",
+        "MUTATION",
+        p=0.83,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+
+    before = evaluate_policy(state, load_policy())
+    assert before.decision == Decision.ACT_AUTO
+
+    # Change a real gate input, not a label or LLM opinion.
+    state.decision_inputs.false_action_cost_cf = 20
+    state.decision_inputs.cf_ci_ratio = 0.20
+
+    after = evaluate_policy(state, load_policy())
+
+    assert after.decision != Decision.ACT_AUTO
+    assert after.authorized is False
+
+
+def test_skeptic_can_block_but_cannot_force_act():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-SKEPTIC-NO-FORCE",
+        "MUTATION",
+        p=0.50,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+
+    state.agents.skeptic.verdict = SkepticVerdict.SUPPORT
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False

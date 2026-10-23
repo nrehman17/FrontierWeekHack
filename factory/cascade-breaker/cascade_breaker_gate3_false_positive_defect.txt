@@ -1,0 +1,154 @@
+=== POLICY ===
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+            authorized=False,
+            reason_code="REQUIRED_INPUT_MISSING",
+        )
+
+    # Highest authority: hard VETO conditions.
+    if tier.value in policy["veto"]["prohibited_tiers"]:
+        return PolicyResult(
+            decision=Decision.VETO,
+            authorized=False,
+            reason_code="T3_ACTION_PROHIBITED",
+        )
+
+    if (
+        policy["veto"]["skeptic_false_positive_match"]
+        and skeptic.false_positive_pattern is not None
+    ):
+        return PolicyResult(
+            decision=Decision.VETO,
+            authorized=False,
+            reason_code="SKEPTIC_FALSE_POSITIVE_MATCH",
+        )
+
+    if p < policy["veto"]["confidence_below"]:
+        return PolicyResult(
+            decision=Decision.VETO,
+            authorized=False,
+            reason_code="CONFIDENCE_BELOW_VETO_THRESHOLD",
+        )
+
+    # Frozen ABSTAIN confidence band takes precedence over ACT evaluation.
+    abstain = policy["abstain"]
+    if abstain["min_confidence"] <= p < abstain["max_confidence_exclusive"]:
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+
+=== VETO CONFIG ===
+    "max_ttl_minutes": 240,
+    "last_call_tipping_point_minutes": 30
+  },
+  "veto": {
+    "confidence_below": 0.4,
+    "prohibited_tiers": ["T3"],
+    "skeptic_false_positive_match": true
+  }
+}
+
+=== TEST BLOCK 1 ===
+            confidence_p=p,
+            predicted_lead_minutes=usable_lead,
+            action_latency_minutes=action_latency,
+            safety_margin_minutes=0,
+            usable_lead_time_minutes=usable_lead,
+            action_tier=ActionTier(tier),
+            false_action_cost_cf=cf,
+            inaction_cost_ci=ci,
+            cf_ci_ratio=cf / ci,
+        ),
+    )
+
+    if skeptic_false_positive:
+        state.agents.skeptic.verdict = SkepticVerdict.CONTRADICT
+        state.agents.skeptic.false_positive_pattern = "KNOWN_FALSE_POSITIVE"
+
+    return state
+
+
+def test_s1_auto_act():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-S1-ACT", "S1_ACT",
+        p=0.83,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.ACT_AUTO
+    assert result.authorized is True
+    assert result.reason_code == "AUTO_ACT_THRESHOLD_MET"
+
+
+def test_s2_skeptic_false_positive_forces_veto():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-S2-VETO", "S2_VETO",
+        p=0.87,
+        usable_lead=180,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+        skeptic_false_positive=True,
+    )
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.VETO
+    assert result.authorized is False
+    assert result.reason_code == "SKEPTIC_FALSE_POSITIVE_MATCH"
+
+
+def test_s3_ambiguous_evidence_abstains():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-S3-ABSTAIN", "S3_ABSTAIN",
+        p=0.50,
+        usable_lead=90,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+
+=== TEST BLOCK 2 ===
+
+def test_skeptic_veto_beats_very_high_confidence():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-SKEPTIC-AUTHORITY",
+        "BOUNDARY",
+        p=0.99,
+        usable_lead=1000,
+        action_latency=1,
+        tier="T1",
+        cf=1,
+        ci=1000,
+        skeptic_false_positive=True,
+    )
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.VETO
+    assert result.authorized is False
+    assert result.reason_code == "SKEPTIC_FALSE_POSITIVE_MATCH"
+
+
+def test_scenario_label_cannot_change_decision():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "TEST-LABEL-LEAK",
+        "S1_ACT",
+        p=0.83,
+        usable_lead=120,

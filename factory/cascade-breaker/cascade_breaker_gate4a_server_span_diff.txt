@@ -1,0 +1,39 @@
+diff --git a/factory/cascade-breaker/src/live_orchestrator.py b/factory/cascade-breaker/src/live_orchestrator.py
+index 94d5f1e..149dda3 100644
+--- a/factory/cascade-breaker/src/live_orchestrator.py
++++ b/factory/cascade-breaker/src/live_orchestrator.py
+@@ -122,6 +122,7 @@ def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
+             "cascade.scenario_id": scenario["scenario_id"],
+             "cascade.synthetic": bool(scenario["synthetic"]),
+         },
++        server_span=True,
+     ) as root_span:
+         available = {a.name: a for a in client.agents.list()}
+         agents = {
+diff --git a/factory/cascade-breaker/src/observability.py b/factory/cascade-breaker/src/observability.py
+index 432f36e..548ac3d 100644
+--- a/factory/cascade-breaker/src/observability.py
++++ b/factory/cascade-breaker/src/observability.py
+@@ -61,13 +61,21 @@ def traced_span(
+     tracer,
+     name: str,
+     attributes: dict[str, Any] | None = None,
++    *,
++    server_span: bool = False,
+ ) -> Iterator[Any]:
+     """Create a span when tracing is enabled; otherwise behave as a no-op."""
+     if tracer is None:
+         yield None
+         return
+ 
+-    with tracer.start_as_current_span(name) as span:
++    kwargs = {}
++    if server_span:
++        from opentelemetry.trace import SpanKind
++
++        kwargs["kind"] = SpanKind.SERVER
++
++    with tracer.start_as_current_span(name, **kwargs) as span:
+         set_span_attributes(span, attributes or {})
+         yield span
+ 

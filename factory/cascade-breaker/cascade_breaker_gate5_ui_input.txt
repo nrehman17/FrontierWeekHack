@@ -1,0 +1,42 @@
+=== HEAD ===
+fb60dbc2d01497b700003d186ef978e156cce6c3
+
+=== STATUS ===
+?? cascade_breaker_gate3_false_positive_defect.txt
+?? cascade_breaker_gate3_false_positive_fix_diff.txt
+?? cascade_breaker_gate3_implementation_input.txt
+?? cascade_breaker_gate3_inspection.txt
+?? cascade_breaker_gate3_precommit_diff.txt
+?? cascade_breaker_gate3_runtime_inspection.txt
+?? cascade_breaker_gate4_content_scan.txt
+?? cascade_breaker_gate4_implementation_input.txt
+?? cascade_breaker_gate4_inspection.txt
+?? cascade_breaker_gate4a_final_review.txt
+?? cascade_breaker_gate4a_flush_fix_diff.txt
+?? cascade_breaker_gate4a_full_review.txt
+?? cascade_breaker_gate4a_observability_diff.txt
+?? cascade_breaker_gate4a_sampling_fix_diff.txt
+?? cascade_breaker_gate4a_server_span_diff.txt
+?? cascade_breaker_gate4b_evaluation_input.txt
+?? cascade_breaker_gate4b_precommit_review.txt
+?? cascade_breaker_gate5_ui_input.txt
+?? evaluation/gate4b_foundry_governor_eval.jsonl
+?? ../cascade_breaker_gate4b_foundry_dataset_format.txt
+?? ../cascade_breaker_gate4b_foundry_eval_inspection.txt
+?? ../../factory_backup_20260916.zip
+
+=== PROJECT FILES ===
+./.pytest_cache/README.md
+./src/agents.py
+./src/evaluation.py
+./src/foundry_agents.py
+./src/__init__.py
+./src/live_orchestrator.py
+./src/observability.py
+./src/orchestrator.py
+./src/policy.py
+./src/schemas.py
+./tests/test_decision_policy.py
+./tests/test_evaluation.py
+
+=== UI DEPENDENCIES ===

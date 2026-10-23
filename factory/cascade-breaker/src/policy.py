@@ -73,6 +73,14 @@ def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
             reason_code="CONFIDENCE_BELOW_VETO_THRESHOLD",
         )
 
+    # Evidence completeness is mandatory for any authorized action.
+    if not state.evidence.evidence_complete:
+        return PolicyResult(
+            decision=Decision.ABSTAIN,
+            authorized=False,
+            reason_code="CRITICAL_EVIDENCE_INCOMPLETE",
+        )
+
     # The skeptic may block action but cannot authorize it.
     if skeptic.verdict != SkepticVerdict.SUPPORT:
         reason = (

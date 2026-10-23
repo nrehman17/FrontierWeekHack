@@ -1,0 +1,17 @@
+=== CASCADE BREAKER GATE 4 PRE-INTEGRATION INSPECTION ===
+
+=== GIT HEAD ===
+20bf4fbff8863948bd02eee487ffc1be70a4bbb4
+
+=== GIT STATUS ===
+?? cascade_breaker_gate3_false_positive_defect.txt
+?? cascade_breaker_gate3_false_positive_fix_diff.txt
+?? cascade_breaker_gate3_implementation_input.txt
+?? cascade_breaker_gate3_inspection.txt
+?? cascade_breaker_gate3_precommit_diff.txt
+?? cascade_breaker_gate3_runtime_inspection.txt
+?? ../../factory_backup_20260916.zip
+
+=== OBSERVABILITY / EVALUATION FILE CANDIDATES ===
+
+=== RELEVANT FILE CONTENT ===

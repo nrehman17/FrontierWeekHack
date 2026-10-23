@@ -1,0 +1,52 @@
+=== GATE 4 CONTENT SCAN ===
+
+--- src/agents.py ---
+22:         reason="Synthetic telemetry contains the weak signals supplied for this demo scenario.",
+--- src/foundry_agents.py ---
+40: Given telemetry and Scout evidence, construct the most plausible cascade hypothesis.
+--- src/live_orchestrator.py ---
+15: from src.policy import evaluate_policy, load_policy
+137:         run_id=str(uuid4()),
+154:     result = evaluate_policy(state, policy)
+162:         "run_id": state.run_id,
+--- src/orchestrator.py ---
+10: from src.policy import evaluate_policy, load_policy
+55:     run_id = str(uuid4())
+67:         run_id=run_id,
+86:     result = evaluate_policy(state, policy)
+91:         "run_id": run_id,
+--- src/policy.py ---
+24: def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
+76:     # Frozen ABSTAIN confidence band takes precedence over ACT evaluation.
+--- src/schemas.py ---
+46:     metric: str
+129:     run_id: str
+--- tests/test_decision_policy.py ---
+15:     run_id,
+26:         run_id=run_id,
+55:     from src.policy import evaluate_policy, load_policy
+67:     result = evaluate_policy(state, load_policy())
+75:     from src.policy import evaluate_policy, load_policy
+88:     result = evaluate_policy(state, load_policy())
+96:     from src.policy import evaluate_policy, load_policy
+108:     result = evaluate_policy(state, load_policy())
+116:     from src.policy import evaluate_policy, load_policy
+129:     result = evaluate_policy(state, load_policy())
+136:     from src.policy import evaluate_policy, load_policy
+149:     result = evaluate_policy(state, load_policy())
+157:     from src.policy import evaluate_policy, load_policy
+170:     result = evaluate_policy(state, load_policy())
+177:     from src.policy import evaluate_policy, load_policy
+191:     result = evaluate_policy(state, load_policy())
+199:     from src.policy import evaluate_policy, load_policy
+216:     result = evaluate_policy(state, load_policy())
+224:     from src.policy import evaluate_policy, load_policy
+237:     first = evaluate_policy(state, load_policy())
+242:     second = evaluate_policy(state, load_policy())
+250:     from src.policy import evaluate_policy, load_policy
+267:     result = evaluate_policy(state, load_policy())
+275:     from src.policy import evaluate_policy, load_policy
+288:     before = evaluate_policy(state, load_policy())
+295:     after = evaluate_policy(state, load_policy())
+302:     from src.policy import evaluate_policy, load_policy
+317:     result = evaluate_policy(state, load_policy())

@@ -1,0 +1,498 @@
+=== CASCADE BREAKER GATE 4 IMPLEMENTATION INPUT ===
+
+=== GIT HEAD ===
+20bf4fbff8863948bd02eee487ffc1be70a4bbb4
+
+=== ROOT FILES ===
+./cascade_breaker_gate4_content_scan.txt
+./cascade_breaker_gate2_review.txt
+./cascade_breaker_gate3_precommit_diff.txt
+./.venv/pyvenv.cfg
+./.venv/.gitignore
+./ledger/runs.jsonl
+./cascade_breaker_gate3_runtime_inspection.txt
+./tests/test_decision_policy.py
+./cascade_breaker_gate3_false_positive_fix_diff.txt
+./.pytest_cache/CACHEDIR.TAG
+./.pytest_cache/README.md
+./.pytest_cache/.gitignore
+./cascade_breaker_gate3_false_positive_defect.txt
+./cascade_breaker_gate3_implementation_input.txt
+./src/live_orchestrator.py
+./src/foundry_agents.py
+./src/__init__.py
+./src/policy.py
+./src/agents.py
+./src/schemas.py
+./src/orchestrator.py
+./cascade_breaker_gate3_inspection.txt
+./data/scenarios.json
+./cascade_breaker_gate4_inspection.txt
+./decision_policy.json
+./.gitignore
+
+
+=== src/schemas.py ===
+from datetime import datetime
+from enum import Enum
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class Decision(str, Enum):
+    ACT_AUTO = "ACT_AUTO"
+    ACT_HUMAN = "ACT_HUMAN"
+    ABSTAIN = "ABSTAIN"
+    VETO = "VETO"
+
+
+class ActionTier(str, Enum):
+    T1 = "T1"
+    T2 = "T2"
+    T3 = "T3"
+
+
+class AgentStatus(str, Enum):
+    PENDING = "PENDING"
+    COMPLETE = "COMPLETE"
+    ERROR = "ERROR"
+
+
+class SkepticVerdict(str, Enum):
+    SUPPORT = "SUPPORT"
+    CONTRADICT = "CONTRADICT"
+    INSUFFICIENT = "INSUFFICIENT"
+
+
+class PolicyRef(StrictModel):
+    policy_id: str
+    policy_version: str
+
+
+class EvidenceItem(StrictModel):
+    evidence_id: str
+    timestamp: datetime
+    source: str
+    metric: str
+    value: float
+    baseline: Optional[float] = None
+    change_pct: Optional[float] = None
+    cohort: Optional[str] = None
+    synthetic: bool = True
+
+
+class Evidence(StrictModel):
+    observations: list[EvidenceItem] = Field(default_factory=list)
+    secondary_evidence: list[EvidenceItem] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    evidence_complete: bool = False
+
+
+class DecisionInputs(StrictModel):
+    confidence_p: Optional[float] = Field(None, ge=0, le=1)
+    predicted_lead_minutes: Optional[float] = Field(None, ge=0)
+    action_latency_minutes: Optional[float] = Field(None, ge=0)
+    safety_margin_minutes: Optional[float] = Field(None, ge=0)
+    usable_lead_time_minutes: Optional[float] = None
+    action_tier: Optional[ActionTier] = None
+    false_action_cost_cf: Optional[float] = Field(None, ge=0)
+    inaction_cost_ci: Optional[float] = Field(None, gt=0)
+    cf_ci_ratio: Optional[float] = Field(None, ge=0)
+
+
+class ScoutState(StrictModel):
+    status: AgentStatus = AgentStatus.PENDING
+    weak_signals: list[str] = Field(default_factory=list)
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+    reason: Optional[str] = None
+
+
+class CascadeState(StrictModel):
+    status: AgentStatus = AgentStatus.PENDING
+    hypothesis: Optional[str] = None
+    tipping_point_minutes: Optional[float] = Field(None, ge=0)
+    proposed_action: Optional[str] = None
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+    reason: Optional[str] = None
+
+
+class SkepticState(StrictModel):
+    status: AgentStatus = AgentStatus.PENDING
+    verdict: Optional[SkepticVerdict] = None
+    false_positive_pattern: Optional[str] = None
+    alternative_hypothesis: Optional[str] = None
+    contradictory_evidence: list[str] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    reason: Optional[str] = None
+
+
+class GovernorState(StrictModel):
+    status: AgentStatus = AgentStatus.PENDING
+    recommended_decision: Optional[Decision] = None
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+    reason: Optional[str] = None
+
+
+class Agents(StrictModel):
+    scout: ScoutState = Field(default_factory=ScoutState)
+    cascade: CascadeState = Field(default_factory=CascadeState)
+    skeptic: SkepticState = Field(default_factory=SkepticState)
+    governor: GovernorState = Field(default_factory=GovernorState)
+
+
+class GateState(StrictModel):
+    decision: Optional[Decision] = None
+    authorized: bool = False
+    reason_code: Optional[str] = None
+
+
+class AbstainState(StrictModel):
+    active: bool = False
+    created_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    ttl_minutes: Optional[float] = Field(None, ge=0)
+    last_call_required: bool = False
+
+
+class DecisionState(StrictModel):
+    schema_version: str = "1.0"
+    run_id: str
+    scenario_id: str
+    scenario_version: str = "1.0"
+    started_at: datetime
+    policy: PolicyRef
+    evidence: Evidence
+    decision_inputs: DecisionInputs
+    agents: Agents = Field(default_factory=Agents)
+    gate: GateState = Field(default_factory=GateState)
+    abstain: AbstainState = Field(default_factory=AbstainState)
+    final_decision: Optional[Decision] = None
+    completed_at: Optional[datetime] = None
+
+
+=== src/live_orchestrator.py ===
+from __future__ import annotations
+
+import json
+import os
+import re
+from datetime import datetime, timezone
+from typing import Any
+from uuid import uuid4
+
+from azure.ai.projects import AIProjectClient
+from azure.identity import DefaultAzureCredential
+
+from src.foundry_agents import AGENT_NAMES, run_foundry_agent
+from src.orchestrator import build_decision_inputs, load_scenarios
+from src.policy import evaluate_policy, load_policy
+from src.schemas import (
+    AgentStatus,
+    Agents,
+    CascadeState,
+    DecisionState,
+    GovernorState,
+    Evidence,
+    PolicyRef,
+    ScoutState,
+    SkepticState,
+)
+
+
+def parse_json_response(text: str) -> dict[str, Any]:
+    cleaned = text.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    value = json.loads(cleaned)
+    if not isinstance(value, dict):
+        raise ValueError("Agent response must be a JSON object")
+    return value
+
+
+def invoke_validated(client, agent, prompt: str, model):
+    invocation = run_foundry_agent(client, agent, prompt)
+    raw = invocation["output_text"]
+    data = parse_json_response(raw)
+    data["status"] = AgentStatus.COMPLETE.value
+
+    # Foundry may emit JSON null for semantically empty list fields.
+    # Normalize only fields whose strict schema requires a list.
+    if model is SkepticState:
+        for field in ("contradictory_evidence", "missing_evidence"):
+            value = data.get(field)
+            if value is None:
+                data[field] = []
+            elif isinstance(value, str):
+                data[field] = [value]
+
+    validated = model.model_validate(data)
+    evidence = {
+        "agent_name": invocation["agent_name"],
+        "response_id": invocation["response_id"],
+        "status": invocation["status"],
+        "conversation_id": invocation["conversation_id"],
+        "model": invocation["model"],
+    }
+    return validated, evidence
+
+
+def public_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in scenario.items()
+        if key not in {"expected_decision", "skeptic_verdict", "false_positive_pattern"}
+    }
+
+
+def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
+    endpoint = os.environ["FOUNDRY_ENDPOINT"]
+    client = AIProjectClient(
+        endpoint=endpoint,
+        credential=DefaultAzureCredential(),
+    )
+
+    available = {a.name: a for a in client.agents.list()}
+    agents = {
+        role: available[name]
+        for role, name in AGENT_NAMES.items()
+    }
+
+    scenario_input = public_scenario(scenario)
+
+    scout, scout_invocation = invoke_validated(
+        client,
+        agents["scout"],
+        "Return JSON only with keys weak_signals, confidence, reason. "
+        "Do not authorize or execute actions.\n"
+        f"Scenario: {json.dumps(scenario_input)}",
+        ScoutState,
+    )
+
+    cascade, cascade_invocation = invoke_validated(
+        client,
+        agents["cascade"],
+        "Return JSON only with keys hypothesis, tipping_point_minutes, "
+        "proposed_action, confidence, reason. Do not authorize or execute actions.\n"
+        f"Scenario: {json.dumps(scenario_input)}\n"
+        f"Scout: {scout.model_dump_json()}",
+        CascadeState,
+    )
+
+    skeptic, skeptic_invocation = invoke_validated(
+        client,
+        agents["skeptic"],
+        "Return JSON only with keys verdict, false_positive_pattern, "
+        "alternative_hypothesis, contradictory_evidence, missing_evidence, reason. "
+        "verdict must be SUPPORT, CONTRADICT, or INSUFFICIENT. "
+        "Use false_positive_pattern only when evidence supports a known pattern. "
+        "You may block but cannot authorize or execute actions.\n"
+        f"Scenario: {json.dumps(scenario_input)}\n"
+        f"Scout: {scout.model_dump_json()}\n"
+        f"Cascade: {cascade.model_dump_json()}",
+        SkepticState,
+    )
+
+    governor, governor_invocation = invoke_validated(
+        client,
+        agents["governor"],
+        "Return JSON only with keys recommended_decision, confidence, reason. "
+        "recommended_decision must be ACT_AUTO, ACT_HUMAN, ABSTAIN, or VETO. "
+        "Your recommendation is advisory only; never claim authorization or execution.\n"
+        f"Scenario: {json.dumps(scenario_input)}\n"
+        f"Scout: {scout.model_dump_json()}\n"
+        f"Cascade: {cascade.model_dump_json()}\n"
+        f"Skeptic: {skeptic.model_dump_json()}",
+        GovernorState,
+    )
+
+    policy = load_policy()
+    state = DecisionState(
+        run_id=str(uuid4()),
+        scenario_id=scenario["scenario_id"],
+        started_at=datetime.now(timezone.utc),
+        policy=PolicyRef(
+            policy_id=policy["policy_id"],
+            policy_version=policy["policy_version"],
+        ),
+        evidence=Evidence(evidence_complete=True),
+        decision_inputs=build_decision_inputs(scenario),
+        agents=Agents(
+            scout=scout,
+            cascade=cascade,
+            skeptic=skeptic,
+            governor=governor,
+        ),
+    )
+
+    result = evaluate_policy(state, policy)
+    state.gate.decision = result.decision
+    state.gate.authorized = result.authorized
+    state.gate.reason_code = result.reason_code
+    state.final_decision = result.decision
+    state.completed_at = datetime.now(timezone.utc)
+
+    return {
+        "run_id": state.run_id,
+        "scenario_id": scenario["scenario_id"],
+        "synthetic": bool(scenario["synthetic"]),
+        "governor_recommendation": governor.recommended_decision.value,
+        "policy_decision": result.decision.value,
+        "authorized": result.authorized,
+        "reason_code": result.reason_code,
+        "foundry_invocations": {
+            "scout": scout_invocation,
+            "cascade": cascade_invocation,
+            "skeptic": skeptic_invocation,
+            "governor": governor_invocation,
+        },
+        "state": state.model_dump(mode="json"),
+    }
+
+
+def main() -> int:
+    scenario = load_scenarios()[0]
+    record = run_live_scenario(scenario)
+    print(json.dumps(record, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+=== src/orchestrator.py ===
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from src.agents import run_cascade, run_governor, run_scout, run_skeptic
+from src.policy import evaluate_policy, load_policy
+from src.schemas import (
+    ActionTier,
+    Agents,
+    DecisionInputs,
+    DecisionState,
+    Evidence,
+    PolicyRef,
+)
+
+
+ROOT = Path(__file__).resolve().parent.parent
+SCENARIOS_PATH = ROOT / "data" / "scenarios.json"
+LEDGER_PATH = ROOT / "ledger" / "runs.jsonl"
+
+
+def load_scenarios() -> list[dict[str, Any]]:
+    with SCENARIOS_PATH.open("r", encoding="utf-8") as handle:
+        return json.load(handle)["scenarios"]
+
+
+def build_decision_inputs(scenario: dict[str, Any]) -> DecisionInputs:
+    predicted_lead = float(scenario["predicted_lead_minutes"])
+    latency = float(scenario["action_latency_minutes"])
+    safety_margin = float(scenario["safety_margin_minutes"])
+    cf = float(scenario["false_action_cost_cf"])
+    ci = float(scenario["inaction_cost_ci"])
+
+    usable_lead = max(0.0, predicted_lead - latency - safety_margin)
+    cf_ci_ratio = cf / ci if ci > 0 else float("inf")
+
+    return DecisionInputs(
+        confidence_p=float(scenario["confidence_p"]),
+        predicted_lead_minutes=predicted_lead,
+        action_latency_minutes=latency,
+        safety_margin_minutes=safety_margin,
+        usable_lead_time_minutes=usable_lead,
+        action_tier=ActionTier(scenario["action_tier"]),
+        false_action_cost_cf=cf,
+        inaction_cost_ci=ci,
+        cf_ci_ratio=cf_ci_ratio,
+    )
+
+
+def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
+    run_id = str(uuid4())
+    started_at = datetime.now(timezone.utc)
+
+    scout = run_scout(scenario)
+    cascade = run_cascade(scenario, scout)
+    skeptic = run_skeptic(scenario, cascade)
+    governor = run_governor(scenario, scout, cascade, skeptic)
+
+    policy = load_policy()
+    decision_inputs = build_decision_inputs(scenario)
+
+    state = DecisionState(
+        run_id=run_id,
+        scenario_id=scenario["scenario_id"],
+        started_at=started_at,
+        policy=PolicyRef(
+            policy_id=policy["policy_id"],
+            policy_version=policy["policy_version"],
+        ),
+        evidence=Evidence(
+            evidence_complete=True,
+        ),
+        decision_inputs=decision_inputs,
+        agents=Agents(
+            scout=scout,
+            cascade=cascade,
+            skeptic=skeptic,
+            governor=governor,
+        ),
+    )
+
+    result = evaluate_policy(state, policy)
+    state.final_decision = result.decision
+    state.completed_at = datetime.now(timezone.utc)
+
+    record = {
+        "run_id": run_id,
+        "scenario_id": scenario["scenario_id"],
+        "synthetic": bool(scenario["synthetic"]),
+        "expected_decision": scenario["expected_decision"],
+        "governor_recommendation": governor.recommended_decision.value,
+        "policy_decision": result.decision.value,
+        "authorized": result.authorized,
+        "reason_code": result.reason_code,
+        "match": result.decision.value == scenario["expected_decision"],
+        "state": state.model_dump(mode="json"),
+    }
+
+    LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with LEDGER_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+    return record
+
+
+def main() -> int:
+    scenarios = load_scenarios()
+    all_match = True
+
+    for scenario in scenarios:
+        record = run_scenario(scenario)
+        all_match = all_match and record["match"]
+
+        print(
+            f"{record['scenario_id']}: "
+            f"expected={record['expected_decision']} "
+            f"policy={record['policy_decision']} "
+            f"authorized={record['authorized']} "
+            f"match={record['match']}"
+        )
+
+    return 0 if all_match else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

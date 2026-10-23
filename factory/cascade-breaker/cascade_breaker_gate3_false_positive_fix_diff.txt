@@ -1,0 +1,99 @@
+=== GATE 3 FALSE-POSITIVE AUTHORITY FIX ===
+HEAD: b0a405a0487e7d7bc2b666e565890fdc561c7143
+
+=== STATUS ===
+ M decision_policy.json
+ M src/policy.py
+ M tests/test_decision_policy.py
+?? cascade_breaker_gate3_false_positive_defect.txt
+?? cascade_breaker_gate3_false_positive_fix_diff.txt
+?? cascade_breaker_gate3_implementation_input.txt
+?? cascade_breaker_gate3_inspection.txt
+?? cascade_breaker_gate3_precommit_diff.txt
+?? cascade_breaker_gate3_runtime_inspection.txt
+?? ../../factory_backup_20260916.zip
+
+=== DIFF ===
+diff --git a/factory/cascade-breaker/decision_policy.json b/factory/cascade-breaker/decision_policy.json
+index 7943cde..ddaa51a 100644
+--- a/factory/cascade-breaker/decision_policy.json
++++ b/factory/cascade-breaker/decision_policy.json
+@@ -21,6 +21,7 @@
+   "veto": {
+     "confidence_below": 0.4,
+     "prohibited_tiers": ["T3"],
+-    "skeptic_false_positive_match": true
++    "skeptic_false_positive_match": true,
++    "known_false_positive_patterns": ["stable-straggler"]
+   }
+ }
+diff --git a/factory/cascade-breaker/src/policy.py b/factory/cascade-breaker/src/policy.py
+index bb2fe99..64fb75b 100644
+--- a/factory/cascade-breaker/src/policy.py
++++ b/factory/cascade-breaker/src/policy.py
+@@ -46,9 +46,19 @@ def evaluate_policy(state: DecisionState, policy: dict) -> PolicyResult:
+             reason_code="T3_ACTION_PROHIBITED",
+         )
+ 
++    known_false_positive_patterns = {
++        str(pattern).strip().casefold()
++        for pattern in policy["veto"].get("known_false_positive_patterns", [])
++    }
++    skeptic_false_positive_pattern = (
++        skeptic.false_positive_pattern.strip().casefold()
++        if skeptic.false_positive_pattern
++        else None
++    )
++
+     if (
+         policy["veto"]["skeptic_false_positive_match"]
+-        and skeptic.false_positive_pattern is not None
++        and skeptic_false_positive_pattern in known_false_positive_patterns
+     ):
+         return PolicyResult(
+             decision=Decision.VETO,
+diff --git a/factory/cascade-breaker/tests/test_decision_policy.py b/factory/cascade-breaker/tests/test_decision_policy.py
+index 5fd17a4..046f389 100644
+--- a/factory/cascade-breaker/tests/test_decision_policy.py
++++ b/factory/cascade-breaker/tests/test_decision_policy.py
+@@ -46,7 +46,7 @@ def make_state(
+ 
+     if skeptic_false_positive:
+         state.agents.skeptic.verdict = SkepticVerdict.CONTRADICT
+-        state.agents.skeptic.false_positive_pattern = "KNOWN_FALSE_POSITIVE"
++        state.agents.skeptic.false_positive_pattern = "stable-straggler"
+ 
+     return state
+ 
+@@ -195,6 +195,31 @@ def test_skeptic_veto_beats_very_high_confidence():
+     assert result.reason_code == "SKEPTIC_FALSE_POSITIVE_MATCH"
+ 
+ 
++def test_unregistered_skeptic_pattern_cannot_force_veto():
++    from src.policy import evaluate_policy, load_policy
++
++    state = make_state(
++        "TEST-UNREGISTERED-SKEPTIC-PATTERN",
++        "S1_ACT",
++        p=0.83,
++        usable_lead=120,
++        action_latency=30,
++        tier="T1",
++        cf=5,
++        ci=100,
++    )
++    state.agents.skeptic.verdict = SkepticVerdict.CONTRADICT
++    state.agents.skeptic.false_positive_pattern = (
++        "Synthetic scenario parameters driving overfitted conclusions based on weak signals."
++    )
++
++    result = evaluate_policy(state, load_policy())
++
++    assert result.decision == Decision.ACT_AUTO
++    assert result.authorized is True
++    assert result.reason_code == "AUTO_ACT_THRESHOLD_MET"
++
++
+ def test_scenario_label_cannot_change_decision():
+     from src.policy import evaluate_policy, load_policy
+ 

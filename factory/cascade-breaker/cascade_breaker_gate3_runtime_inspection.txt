@@ -1,0 +1,224 @@
+=== GATE 3 CURRENT RUNTIME EVIDENCE INSPECTION ===
+UTC: 2026-09-21T12:02:36.572100+00:00
+
+=== GIT HEAD ===
+603e442162c4a0dce3d399666074948e9735200f
+
+=== GIT STATUS ===
+ M src/foundry_agents.py
+?? cascade_breaker_gate3_implementation_input.txt
+?? cascade_breaker_gate3_inspection.txt
+?? ../../factory_backup_20260916.zip
+
+
+=== FOUNDRY AGENT RUNTIME ===
+78:             agent_name=f"cascade-breaker-{role}",
+79:             definition=PromptAgentDefinition(
+80:                 model=model_deployment_name,
+81:                 instructions=AGENT_INSTRUCTIONS[role],
+82:             ),
+83:         )
+84: 
+85:     return created
+86: 
+87: def run_foundry_agent(client, agent, input_text: str) -> str:
+88:     """Run one Cascade Breaker Foundry agent and return its text response."""
+89:     openai = client.get_openai_client()
+90:     conversation = openai.conversations.create()
+91: 
+92:     try:
+93:         response = openai.responses.create(
+94:             input=input_text,
+95:             conversation=conversation.id,
+96:             extra_body={
+97:                 "agent_reference": {
+98:                     "name": agent.name,
+99:                     "type": "agent_reference",
+100:                 }
+101:             },
+102:         )
+103:         return {
+104:             "output_text": response.output_text,
+105:             "response_id": response.id,
+106:             "status": response.status,
+107:             "conversation_id": getattr(response.conversation, "id", response.conversation),
+108:             "model": response.model,
+109:             "agent_name": agent.name,
+110:         }
+111:     finally:
+112:         openai.conversations.delete(conversation_id=conversation.id)
+
+=== LIVE ORCHESTRATOR VALIDATION BOUNDARY ===
+30:     cleaned = text.strip()
+31:     cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+32:     cleaned = re.sub(r"\s*```$", "", cleaned)
+33:     value = json.loads(cleaned)
+34:     if not isinstance(value, dict):
+35:         raise ValueError("Agent response must be a JSON object")
+36:     return value
+37: 
+38: 
+39: def invoke_validated(client, agent, prompt: str, model):
+40:     raw = run_foundry_agent(client, agent, prompt)
+41:     data = parse_json_response(raw)
+42:     data["status"] = AgentStatus.COMPLETE.value
+43: 
+44:     # Foundry may emit JSON null for semantically empty list fields.
+45:     # Normalize only fields whose strict schema requires a list.
+46:     if model is SkepticState:
+47:         for field in ("contradictory_evidence", "missing_evidence"):
+48:             value = data.get(field)
+49:             if value is None:
+50:                 data[field] = []
+51:             elif isinstance(value, str):
+52:                 data[field] = [value]
+53: 
+54:     return model.model_validate(data)
+55: 
+56: 
+57: def public_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
+58:     return {
+59:         key: value
+60:         for key, value in scenario.items()
+61:         if key not in {"expected_decision", "skeptic_verdict", "false_positive_pattern"}
+62:     }
+63: 
+64: 
+65: def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
+66:     endpoint = os.environ["FOUNDRY_ENDPOINT"]
+67:     client = AIProjectClient(
+68:         endpoint=endpoint,
+69:         credential=DefaultAzureCredential(),
+70:     )
+
+=== LIVE AGENT CHAIN + DETERMINISTIC GATE ===
+65: def run_live_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
+66:     endpoint = os.environ["FOUNDRY_ENDPOINT"]
+67:     client = AIProjectClient(
+68:         endpoint=endpoint,
+69:         credential=DefaultAzureCredential(),
+70:     )
+71: 
+72:     available = {a.name: a for a in client.agents.list()}
+73:     agents = {
+74:         role: available[name]
+75:         for role, name in AGENT_NAMES.items()
+76:     }
+77: 
+78:     scenario_input = public_scenario(scenario)
+79: 
+80:     scout = invoke_validated(
+81:         client,
+82:         agents["scout"],
+83:         "Return JSON only with keys weak_signals, confidence, reason. "
+84:         "Do not authorize or execute actions.\n"
+85:         f"Scenario: {json.dumps(scenario_input)}",
+86:         ScoutState,
+87:     )
+88: 
+89:     cascade = invoke_validated(
+90:         client,
+91:         agents["cascade"],
+92:         "Return JSON only with keys hypothesis, tipping_point_minutes, "
+93:         "proposed_action, confidence, reason. Do not authorize or execute actions.\n"
+94:         f"Scenario: {json.dumps(scenario_input)}\n"
+95:         f"Scout: {scout.model_dump_json()}",
+96:         CascadeState,
+97:     )
+98: 
+99:     skeptic = invoke_validated(
+100:         client,
+101:         agents["skeptic"],
+102:         "Return JSON only with keys verdict, false_positive_pattern, "
+103:         "alternative_hypothesis, contradictory_evidence, missing_evidence, reason. "
+104:         "verdict must be SUPPORT, CONTRADICT, or INSUFFICIENT. "
+105:         "Use false_positive_pattern only when evidence supports a known pattern. "
+106:         "You may block but cannot authorize or execute actions.\n"
+107:         f"Scenario: {json.dumps(scenario_input)}\n"
+108:         f"Scout: {scout.model_dump_json()}\n"
+109:         f"Cascade: {cascade.model_dump_json()}",
+110:         SkepticState,
+111:     )
+112: 
+113:     governor = invoke_validated(
+114:         client,
+115:         agents["governor"],
+116:         "Return JSON only with keys recommended_decision, confidence, reason. "
+117:         "recommended_decision must be ACT_AUTO, ACT_HUMAN, ABSTAIN, or VETO. "
+118:         "Your recommendation is advisory only; never claim authorization or execution.\n"
+119:         f"Scenario: {json.dumps(scenario_input)}\n"
+120:         f"Scout: {scout.model_dump_json()}\n"
+121:         f"Cascade: {cascade.model_dump_json()}\n"
+122:         f"Skeptic: {skeptic.model_dump_json()}",
+123:         GovernorState,
+124:     )
+125: 
+126:     policy = load_policy()
+127:     state = DecisionState(
+128:         run_id=str(uuid4()),
+129:         scenario_id=scenario["scenario_id"],
+130:         started_at=datetime.now(timezone.utc),
+131:         policy=PolicyRef(
+132:             policy_id=policy["policy_id"],
+133:             policy_version=policy["policy_version"],
+134:         ),
+135:         evidence=Evidence(evidence_complete=True),
+136:         decision_inputs=build_decision_inputs(scenario),
+137:         agents=Agents(
+138:             scout=scout,
+139:             cascade=cascade,
+140:             skeptic=skeptic,
+141:             governor=governor,
+142:         ),
+143:     )
+144: 
+145:     result = evaluate_policy(state, policy)
+146:     state.gate.decision = result.decision
+147:     state.gate.authorized = result.authorized
+148:     state.gate.reason_code = result.reason_code
+149:     state.final_decision = result.decision
+150:     state.completed_at = datetime.now(timezone.utc)
+151: 
+152:     return {
+153:         "run_id": state.run_id,
+154:         "scenario_id": scenario["scenario_id"],
+155:         "synthetic": bool(scenario["synthetic"]),
+156:         "governor_recommendation": governor.recommended_decision.value,
+157:         "policy_decision": result.decision.value,
+158:         "authorized": result.authorized,
+159:         "reason_code": result.reason_code,
+160:         "state": state.model_dump(mode="json"),
+161:     }
+162: 
+163: 
+164: def main() -> int:
+165:     scenario = load_scenarios()[0]
+166:     record = run_live_scenario(scenario)
+167:     print(json.dumps(record, indent=2))
+168:     return 0
+169: 
+170: 
+171: if __name__ == "__main__":
+172:     raise SystemExit(main())
+
+=== CURRENT DIFF ===
+diff --git a/factory/cascade-breaker/src/foundry_agents.py b/factory/cascade-breaker/src/foundry_agents.py
+index b0a5292..c5640af 100644
+--- a/factory/cascade-breaker/src/foundry_agents.py
++++ b/factory/cascade-breaker/src/foundry_agents.py
+@@ -100,6 +100,13 @@ def run_foundry_agent(client, agent, input_text: str) -> str:
+                 }
+             },
+         )
+-        return response.output_text
++        return {
++            "output_text": response.output_text,
++            "response_id": response.id,
++            "status": response.status,
++            "conversation_id": getattr(response.conversation, "id", response.conversation),
++            "model": response.model,
++            "agent_name": agent.name,
++        }
+     finally:
+         openai.conversations.delete(conversation_id=conversation.id)
+

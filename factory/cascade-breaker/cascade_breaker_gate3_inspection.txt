@@ -1,0 +1,310 @@
+]633;E;echo "=== GATE 3 PRE-INTEGRATION INSPECTION ===";77ea20a6-d87b-42a4-beb5-ff5ae3375d79]633;C=== GATE 3 PRE-INTEGRATION INSPECTION ===
+Mon 21 Sep 2026 06:53:04 AM UTC
+
+=== FOUNDRY ADAPTER ===
+"""Microsoft Foundry adapter for Cascade Breaker.
+
+Four advisory agents:
+Scout -> Cascade -> Skeptic -> Governor
+
+IMPORTANT:
+LLM agents never execute actions.
+Final authority remains with the deterministic Cascade Action Gate.
+"""
+
+import os
+
+from azure.ai.projects import AIProjectClient
+from azure.ai.projects.models import PromptAgentDefinition
+from azure.identity import DefaultAzureCredential
+
+
+PROJECT_ENDPOINT = os.getenv("FOUNDRY_ENDPOINT") or os.getenv("PROJECT_CONNECTION_STRING")
+MODEL_DEPLOYMENT_NAME = os.getenv("MODEL_DEPLOYMENT_NAME", "gpt-4o")
+
+
+AGENT_NAMES = {
+    "scout": "cascade-breaker-scout",
+    "cascade": "cascade-breaker-cascade",
+    "skeptic": "cascade-breaker-skeptic",
+    "governor": "cascade-breaker-governor",
+}
+
+AGENT_INSTRUCTIONS = {
+    "scout": """
+You are Scout in Cascade Breaker.
+Detect weak multi-signal evidence that may indicate an emerging cascade.
+Prioritize high recall. Report evidence and uncertainty.
+Do not recommend or execute actions.
+Return concise machine-readable reasoning suitable for downstream agents.
+""".strip(),
+
+    "cascade": """
+You are Cascade in Cascade Breaker.
+Given telemetry and Scout evidence, construct the most plausible cascade hypothesis.
+Estimate the tipping point and usable intervention window.
+Propose a bounded intervention and state assumptions and uncertainty.
+You may propose an action, but you cannot authorize or execute it.
+""".strip(),
+
+    "skeptic": """
+You are Skeptic in Cascade Breaker.
+Adversarially challenge the proposed cascade and intervention.
+Look for contradictory evidence, alternative explanations, missing evidence,
+and known false-positive patterns.
+You may block a hypothesis but you cannot authorize or execute an action.
+""".strip(),
+
+    "governor": """
+You are Governor in Cascade Breaker.
+Synthesize Scout, Cascade, and Skeptic evidence.
+Recommend exactly one decision: ACT_AUTO, ACT_HUMAN, ABSTAIN, or VETO.
+Explain the recommendation and uncertainty.
+Your recommendation is advisory only.
+The deterministic Cascade Action Gate has final authority and you must never
+claim that you executed or authorized an action.
+""".strip(),
+}
+
+def create_foundry_agents(project_client, model_deployment_name: str):
+    """Create/version the four Cascade Breaker agents in Microsoft Foundry."""
+    created = {}
+
+    for role in ("scout", "cascade", "skeptic", "governor"):
+        created[role] = project_client.agents.create_version(
+            agent_name=f"cascade-breaker-{role}",
+            definition=PromptAgentDefinition(
+                model=model_deployment_name,
+                instructions=AGENT_INSTRUCTIONS[role],
+            ),
+        )
+
+    return created
+
+def run_foundry_agent(client, agent, input_text: str) -> str:
+    """Run one Cascade Breaker Foundry agent and return its text response."""
+    openai = client.get_openai_client()
+    conversation = openai.conversations.create()
+
+    try:
+        response = openai.responses.create(
+            input=input_text,
+            conversation=conversation.id,
+            extra_body={
+                "agent_reference": {
+                    "name": agent.name,
+                    "type": "agent_reference",
+                }
+            },
+        )
+        return response.output_text
+    finally:
+        openai.conversations.delete(conversation_id=conversation.id)
+
+=== ORCHESTRATOR ===
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from src.agents import run_cascade, run_governor, run_scout, run_skeptic
+from src.policy import evaluate_policy, load_policy
+from src.schemas import (
+    ActionTier,
+    Agents,
+    DecisionInputs,
+    DecisionState,
+    Evidence,
+    PolicyRef,
+)
+
+
+ROOT = Path(__file__).resolve().parent.parent
+SCENARIOS_PATH = ROOT / "data" / "scenarios.json"
+LEDGER_PATH = ROOT / "ledger" / "runs.jsonl"
+
+
+def load_scenarios() -> list[dict[str, Any]]:
+    with SCENARIOS_PATH.open("r", encoding="utf-8") as handle:
+        return json.load(handle)["scenarios"]
+
+
+def build_decision_inputs(scenario: dict[str, Any]) -> DecisionInputs:
+    predicted_lead = float(scenario["predicted_lead_minutes"])
+    latency = float(scenario["action_latency_minutes"])
+    safety_margin = float(scenario["safety_margin_minutes"])
+    cf = float(scenario["false_action_cost_cf"])
+    ci = float(scenario["inaction_cost_ci"])
+
+    usable_lead = max(0.0, predicted_lead - latency - safety_margin)
+    cf_ci_ratio = cf / ci if ci > 0 else float("inf")
+
+    return DecisionInputs(
+        confidence_p=float(scenario["confidence_p"]),
+        predicted_lead_minutes=predicted_lead,
+        action_latency_minutes=latency,
+        safety_margin_minutes=safety_margin,
+        usable_lead_time_minutes=usable_lead,
+        action_tier=ActionTier(scenario["action_tier"]),
+        false_action_cost_cf=cf,
+        inaction_cost_ci=ci,
+        cf_ci_ratio=cf_ci_ratio,
+    )
+
+
+def run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
+    run_id = str(uuid4())
+    started_at = datetime.now(timezone.utc)
+
+    scout = run_scout(scenario)
+    cascade = run_cascade(scenario, scout)
+    skeptic = run_skeptic(scenario, cascade)
+    governor = run_governor(scenario, scout, cascade, skeptic)
+
+    policy = load_policy()
+    decision_inputs = build_decision_inputs(scenario)
+
+    state = DecisionState(
+        run_id=run_id,
+        scenario_id=scenario["scenario_id"],
+        started_at=started_at,
+        policy=PolicyRef(
+            policy_id=policy["policy_id"],
+            policy_version=policy["policy_version"],
+        ),
+        evidence=Evidence(
+            evidence_complete=True,
+        ),
+        decision_inputs=decision_inputs,
+        agents=Agents(
+            scout=scout,
+            cascade=cascade,
+            skeptic=skeptic,
+            governor=governor,
+        ),
+    )
+
+    result = evaluate_policy(state, policy)
+    state.final_decision = result.decision
+    state.completed_at = datetime.now(timezone.utc)
+
+    record = {
+        "run_id": run_id,
+        "scenario_id": scenario["scenario_id"],
+        "synthetic": bool(scenario["synthetic"]),
+        "expected_decision": scenario["expected_decision"],
+        "governor_recommendation": governor.recommended_decision.value,
+        "policy_decision": result.decision.value,
+        "authorized": result.authorized,
+        "reason_code": result.reason_code,
+        "match": result.decision.value == scenario["expected_decision"],
+        "state": state.model_dump(mode="json"),
+    }
+
+    LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with LEDGER_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+    return record
+
+
+def main() -> int:
+    scenarios = load_scenarios()
+    all_match = True
+
+    for scenario in scenarios:
+        record = run_scenario(scenario)
+        all_match = all_match and record["match"]
+
+        print(
+            f"{record['scenario_id']}: "
+            f"expected={record['expected_decision']} "
+            f"policy={record['policy_decision']} "
+            f"authorized={record['authorized']} "
+            f"match={record['match']}"
+        )
+
+    return 0 if all_match else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+=== SCENARIOS ===
+{
+  "scenarios": [
+    {
+      "scenario_id": "S1_ACT",
+      "title": "Meter margin cascade",
+      "synthetic": true,
+      "weak_signals": [
+        "context tokens per session rising",
+        "provider inference price increased",
+        "cache hit rate declining"
+      ],
+      "confidence_p": 0.83,
+      "predicted_lead_minutes": 120,
+      "action_latency_minutes": 15,
+      "safety_margin_minutes": 15,
+      "action_tier": "T1",
+      "false_action_cost_cf": 5,
+      "inaction_cost_ci": 100,
+      "skeptic_verdict": "SUPPORT",
+      "false_positive_pattern": null,
+      "proposed_action": "route eligible traffic to lower-cost model tier",
+      "expected_decision": "ACT_AUTO"
+    },
+    {
+      "scenario_id": "S2_VETO",
+      "title": "Steady-state straggler",
+      "synthetic": true,
+      "weak_signals": [
+        "single slow node observed",
+        "latency remains stable for six hours",
+        "no correlated cost acceleration"
+      ],
+      "confidence_p": 0.72,
+      "predicted_lead_minutes": 90,
+      "action_latency_minutes": 15,
+      "safety_margin_minutes": 15,
+      "action_tier": "T1",
+      "false_action_cost_cf": 5,
+      "inaction_cost_ci": 100,
+      "skeptic_verdict": "CONTRADICT",
+      "false_positive_pattern": "stable-straggler",
+      "proposed_action": "reroute traffic away from suspected node",
+      "expected_decision": "VETO"
+    },
+    {
+      "scenario_id": "S3_ABSTAIN",
+      "title": "Ambiguous cost drift",
+      "synthetic": true,
+      "weak_signals": [
+        "cost per session drifting upward",
+        "cache efficiency fluctuating",
+        "demand mix uncertain"
+      ],
+      "confidence_p": 0.50,
+      "predicted_lead_minutes": 75,
+      "action_latency_minutes": 15,
+      "safety_margin_minutes": 15,
+      "action_tier": "T2",
+      "false_action_cost_cf": 20,
+      "inaction_cost_ci": 100,
+      "skeptic_verdict": "INSUFFICIENT",
+      "false_positive_pattern": null,
+      "proposed_action": "prepare bounded routing intervention for human review",
+      "expected_decision": "ABSTAIN"
+    }
+  ]
+}
+
+=== GIT STATUS ===
+?? cascade_breaker_gate3_inspection.txt
+?? ../../factory_backup_20260916.zip
+
+=== GIT HEAD ===
+72f91cfbb2abc5f2a7587ad1982fbd09912694f2

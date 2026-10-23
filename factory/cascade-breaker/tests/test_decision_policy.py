@@ -364,3 +364,25 @@ def test_skeptic_can_block_but_cannot_force_act():
 
     assert result.decision == Decision.ABSTAIN
     assert result.authorized is False
+
+def test_incomplete_evidence_cannot_authorize_auto_act():
+    from src.policy import evaluate_policy, load_policy
+
+    state = make_state(
+        "REDTEAM-INCOMPLETE-EVIDENCE",
+        "EVIDENCE_BOUNDARY",
+        p=0.83,
+        usable_lead=120,
+        action_latency=30,
+        tier="T1",
+        cf=5,
+        ci=100,
+    )
+    state.evidence.evidence_complete = False
+
+    result = evaluate_policy(state, load_policy())
+
+    assert result.decision == Decision.ABSTAIN
+    assert result.authorized is False
+    assert result.reason_code == "CRITICAL_EVIDENCE_INCOMPLETE"
+

@@ -70,6 +70,7 @@ def invoke_validated(
             {
                 "foundry.response_id": invocation["response_id"],
                 "foundry.response_status": invocation["status"],
+clear
                 "foundry.model": invocation["model"],
             },
         )
